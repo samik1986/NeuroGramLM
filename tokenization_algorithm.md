@@ -9,12 +9,19 @@ Since biological volumes may not be perfectly registered to CCFv3 and trees may 
 
 1. **Graph Parsing:** Parse the tree into nodes containing geometry $(X, Y, Z, R)$ and build a directed adjacency list (`parent -> children`).
 2. **Relative Vector Computation:** For every edge (from parent $u$ to child $v$), compute the scale/translation independent vector: 
-   $$ \Delta \vec{v} = (\Delta X, \Delta Y, \Delta Z, \Delta R) $$
+   $ \Delta \vec{v} = (\Delta X, \Delta Y, \Delta Z, \Delta R) $
    where $\Delta X = X_v - X_u$, etc.
 3. **Subsampling (Optimization):** In high-resolution datasets, the number of extracted vectors can easily exceed millions. To drastically speed up vocabulary generation without losing geometric diversity, we randomly subsample the vectors down to a manageable limit (e.g., $100,000$ samples).
 4. **K-Means Clustering (VQ):** Pool the subsampled $\Delta \vec{v}$ vectors and run K-Means clustering (e.g., $K=512$). Each cluster center receives an integer ID, forming the geometric vocabulary `<GEO_0>` to `<GEO_511>`.
 
-## Phase 2: Iterative DFS Sequence Generation
+## Phase 3: Spatial Jumps for Union/Intersection
+When an SWC file contains multiple fragmented subtrees (or when stitching multiple tiles), the model must understand the relative gap between the fragments without relying on global CCFv3 coordinates.
+1. **Jump Vector Calculation:** When jumping from the last visited node of Subtree A to the root node of Subtree B, we calculate the continuous distance vector $\Delta \vec{J} = (\Delta X, \Delta Y, \Delta Z)$.
+   *(Assumption: Calculating from the last leaf node simulates the microscope moving continuously to the next fragment).*
+2. **Grid Quantization:** The jump distance is binned into integer grid coordinates (e.g., dividing by `JUMP_BIN_SIZE = 10.0`). 
+3. **Token Emission:** A `<JUMP_x_y_z>` token is emitted between the two sequences to tell the language model precisely how far apart the fragments are. This allows the model's attention mechanism to perform union/intersection on disconnected fragments.
+
+## Phase 4: Output Sequence Generation
 To convert the branching tree into a flat string, we use structural control tokens: `<START>`, `<BIF>` (bifurcation/branch point), `<POP>` (backtrack), and `<END>`. 
 
 To prevent stack overflow on extremely deep trees (10,000+ nodes), the sequence generation is implemented as an **Iterative DFS** using a custom action stack.
