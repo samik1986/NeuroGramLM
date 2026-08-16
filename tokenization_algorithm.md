@@ -11,7 +11,8 @@ Since biological volumes may not be perfectly registered to CCFv3 and trees may 
 2. **Relative Vector Computation:** For every edge (from parent $u$ to child $v$), compute the scale/translation independent vector: 
    $$ \Delta \vec{v} = (\Delta X, \Delta Y, \Delta Z, \Delta R) $$
    where $\Delta X = X_v - X_u$, etc.
-3. **K-Means Clustering (VQ):** Pool all $\Delta \vec{v}$ vectors across the dataset and run K-Means clustering (e.g., $K=512$). Each cluster center receives an integer ID, forming the geometric vocabulary `<GEO_0>` to `<GEO_511>`.
+3. **Subsampling (Optimization):** In high-resolution datasets, the number of extracted vectors can easily exceed millions. To drastically speed up vocabulary generation without losing geometric diversity, we randomly subsample the vectors down to a manageable limit (e.g., $100,000$ samples).
+4. **K-Means Clustering (VQ):** Pool the subsampled $\Delta \vec{v}$ vectors and run K-Means clustering (e.g., $K=512$). Each cluster center receives an integer ID, forming the geometric vocabulary `<GEO_0>` to `<GEO_511>`.
 
 ## Phase 2: Iterative DFS Sequence Generation
 To convert the branching tree into a flat string, we use structural control tokens: `<START>`, `<BIF>` (bifurcation/branch point), `<POP>` (backtrack), and `<END>`. 
