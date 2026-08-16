@@ -7,9 +7,14 @@ import json
 import warnings
 warnings.filterwarnings('ignore')
 
-SWC_DIR = 'SWCs/'
-BATCH_SIZE = 50 # Process a small batch first
-NUM_CLUSTERS = 128 # Small K for the small batch testing
+with open('config.json', 'r') as f:
+    config = json.load(f)
+
+SWC_DIR = config.get("SWC_DIR", "SWCs/")
+BATCH_SIZE = config.get("BATCH_SIZE", 50)
+NUM_CLUSTERS = config.get("NUM_CLUSTERS", 128)
+MAX_SAMPLES = config.get("MAX_SAMPLES_FOR_KMEANS", 100000)
+JUMP_BIN_SIZE = config.get("JUMP_BIN_SIZE", 10.0)
 
 def parse_swc(filepath):
     """Parses an SWC file into nodes and adjacency list."""
@@ -75,10 +80,20 @@ def generate_sequence(nodes, children, roots, kmeans):
     """Generates the DFS token sequence iteratively to avoid recursion limits."""
     full_seq = []
     visited = set()
+    last_visited_node_id = None
     
     for r in roots:
         if r in visited: continue
         
+        if last_visited_node_id is not None:
+            dx = nodes[r][0] - nodes[last_visited_node_id][0]
+            dy = nodes[r][1] - nodes[last_visited_node_id][1]
+            dz = nodes[r][2] - nodes[last_visited_node_id][2]
+            jx = int(round(dx / JUMP_BIN_SIZE))
+            jy = int(round(dy / JUMP_BIN_SIZE))
+            jz = int(round(dz / JUMP_BIN_SIZE))
+            full_seq.append(f"<JUMP_{jx}_{jy}_{jz}>")
+            
         full_seq.append("<START>")
         stack = [("VISIT", r)]
         
@@ -88,6 +103,7 @@ def generate_sequence(nodes, children, roots, kmeans):
                 full_seq.append(action[1])
             elif action[0] == "VISIT":
                 u = action[1]
+                last_visited_node_id = u
                 
                 if u in visited:
                     continue
@@ -157,10 +173,17 @@ def main():
             
     print(f"Extracted {len(all_vectors)} directional vectors. Training K-Means (K={NUM_CLUSTERS})...", flush=True)
     
-    # 2. Train K-Means
+    # 2. Train K-Means (Optimized with Subsampling)
     X = np.array(all_vectors)
-    kmeans = KMeans(n_clusters=min(NUM_CLUSTERS, len(X)), random_state=42, n_init=10)
-    kmeans.fit(X)
+    if len(X) > MAX_SAMPLES:
+        print(f"Subsampling {len(X)} down to {MAX_SAMPLES} for fast VQ training...", flush=True)
+        indices = np.random.choice(len(X), MAX_SAMPLES, replace=False)
+        X_train = X[indices]
+    else:
+        X_train = X
+        
+    kmeans = KMeans(n_clusters=min(NUM_CLUSTERS, len(X_train)), random_state=42, n_init=10)
+    kmeans.fit(X_train)
     print("K-Means training complete.", flush=True)
     
     # 3. Generate Token Sequences
