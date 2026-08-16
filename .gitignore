@@ -1,0 +1,16 @@
+# Ignore the massive SWC dataset
+SWCs/
+*.swc
+
+# Ignore tokenized output and models
+*.json
+*.parquet
+*.pt
+*.pth
+
+# Ignore python caches and logs
+__pycache__/
+*.pyc
+*.log
+scratch*.py
+.vscode/
