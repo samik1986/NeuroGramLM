@@ -1,0 +1,12 @@
+{
+  "_assumptions": {
+    "JUMP_REFERENCE": "Jumps are calculated from the 'last_visited_node' (typically a leaf) of the previous tree to the root of the next tree. This simulates the microscope moving continuously to the next fragment.",
+    "JUMP_BIN_SIZE": "Set to 10.0 micrometers. A 10.0 bin size provides an optimal balance, creating a manageable vocabulary size for cross-tile spatial gaps while retaining enough resolution for the language model to learn connectivity."
+  },
+  "SWC_DIR": "SWCs/",
+  "BATCH_SIZE": 50,
+  "NUM_CLUSTERS": 128,
+  "MAX_SAMPLES_FOR_KMEANS": 100000,
+  "JUMP_BIN_SIZE": 10.0,
+  "OUTPUT_FILE": "tokenized_batch.json"
+}
