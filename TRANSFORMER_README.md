@@ -70,3 +70,24 @@ During autoregressive generation, the Transformer predicts the next spatial coor
 
 ### Path of Least Resistance
 The algorithm calculates the cheapest path between the end of Fragment A and the start of Fragment B across the intensity mountain ridge (the Frangi Vesselness map). The cost function is `1.0 / (vesselness + 1e-6)`. This guarantees that the generated linkages remain biologically plausible and follow the actual underlying intensity signals. It also supports **Atlas Space Routing** (without a raw volume), utilizing uniform Euclidean distance to route purely within abstract spatial bounds.
+
+## Step 6: LM-Guided Topology Inference (`merge_fragments.py`)
+
+### Overview
+This is the final script that unifies the unsupervised topological fragments with the Language Model's neuron grammar. 
+
+### Implementation
+1. The script loads all disconnected topological fragments from `extracted_fragments.swc`.
+2. The terminal (leaf) branches of these fragments are traced back to their root, tokenized, and fed into the `NeuroGramTransformer`.
+3. The Transformer acts as a topological anchor generator, autoregressively predicting the optimal `GEO` spatial token for where this branch should continue.
+4. The predicted anchor token is matched against the root nodes of all other unmerged fragments to find the most probable, biologically-grammatical connection.
+5. The `inference_routing` engine is invoked to route a physical spline through the raw intensity volume linking the leaf to the predicted root.
+6. The fully joined neuron graph is saved to `final_merged_neuron.swc`.
+
+## Step 7: Evaluation & Metrics (`compare_swc.py`)
+
+### Overview
+After the transformer has reconstructed or merged SWCs, we must computationally validate the topological accuracy against ground-truth SWCs.
+
+### Implementation
+The `compare_swc.py` script parses both the original and reconstructed `.swc` files, and automatically prints quantitative comparison metrics for Node Count, Total Path Length in microns, and Bounding Box Extents (X,Y,Z).
