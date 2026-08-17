@@ -2,7 +2,7 @@ import json
 import time
 from collections import Counter
 
-def main():
+def main() -> None:
     print("Starting comprehensive dataset metrics calculation...")
     start_time = time.time()
     

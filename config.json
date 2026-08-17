@@ -1,17 +1,4 @@
 {
-  "_assumptions": {
-    "JUMP_REFERENCE": "Jumps are calculated from the 'last_visited_node' (typically a leaf) of the previous tree to the root of the next tree. This simulates the microscope moving continuously to the next fragment.",
-    "JUMP_BIN_SIZE": "Set to 10.0 micrometers. A 10.0 bin size provides an optimal balance, creating a manageable vocabulary size for cross-tile spatial gaps while retaining enough resolution for the language model to learn connectivity.",
-    "VOCAB_TRAIN_SAMPLES": "For vocabulary training, we don't need to load all 180k files. We take a stratified random sample across different dataset folders to capture all geometric diversity.",
-    "MULTIPROCESSING": "Enabled by default. Python's ProcessPoolExecutor uses all available CPU cores for Phase B (Sequence Generation), bypassing the GIL and speeding up the 180k processing by 10-20x."
-  },
-  "SWC_DIR": "SWCs/",
-  "NUM_CLUSTERS": 512,
-  "JUMP_BIN_SIZE": 10.0,
-  "GEO_VOCAB_MODEL_PATH": "kmeans_geo_vocab.pkl",
-  "INV_VOCAB_MODEL_PATH": "kmeans_inv_vocab.pkl",
-  "VOCAB_TRAIN_FILES": 1000,
-  "MAX_SAMPLES_FOR_KMEANS": 100000,
-  "MAX_WORKERS": 16,
-  "OUTPUT_FILE": "tokenized_dataset.jsonl"
+    "volume_path": "c:\\Users\\banerjee\\Desktop\\Current Work\\um1_3d_volume\\data_046\\F0046_multichannel_cmle_ch03.tif",
+    "spacing_xyz": [0.11, 0.11, 0.5]
 }

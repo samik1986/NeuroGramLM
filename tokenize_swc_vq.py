@@ -16,6 +16,7 @@ import random
 import joblib
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Dict, List, Tuple, Optional, Any
 
 warnings.filterwarnings('ignore')
 
@@ -36,7 +37,7 @@ OUTPUT_FILE = config.get("OUTPUT_FILE", "tokenized_dataset.jsonl")
 annotation_volume = None
 resolution = 25
 
-def init_worker():
+def init_worker() -> None:
     global annotation_volume, resolution
     try:
         import nrrd
@@ -47,7 +48,7 @@ def init_worker():
         print(f"Worker atlas init failed: {e}")
         annotation_volume = None
 
-def parse_swc(filepath):
+def parse_swc(filepath: str) -> Tuple[Dict[int, Tuple[float, float, float, float, int]], Dict[int, List[int]], List[int]]:
     nodes = {}
     children = defaultdict(list)
     
@@ -71,7 +72,7 @@ def parse_swc(filepath):
     roots = [n for n in nodes.keys() if n not in all_children]
     return nodes, dict(children), roots
 
-def get_inv_features(u, v, nodes):
+def get_inv_features(u: int, v: int, nodes: Dict[int, Tuple[float, float, float, float, int]]) -> Tuple[float, float]:
     dx = nodes[v][0] - nodes[u][0]
     dy = nodes[v][1] - nodes[u][1]
     dz = nodes[v][2] - nodes[u][2]
@@ -103,7 +104,7 @@ def get_inv_features(u, v, nodes):
         
     return theta, ratio
 
-def extract_vectors(filepath):
+def extract_vectors(filepath: str) -> Tuple[List[List[float]], List[List[float]]]:
     nodes, children, roots = parse_swc(filepath)
     geo_vectors = []
     inv_vectors = []
@@ -121,7 +122,7 @@ def extract_vectors(filepath):
             
     return geo_vectors, inv_vectors
 
-def get_region_token(x, y, z):
+def get_region_token(x: float, y: float, z: float) -> str:
     if annotation_volume is None:
         return "<REG_UNKNOWN>"
     try:
@@ -139,7 +140,7 @@ def get_region_token(x, y, z):
     except Exception:
         return "<REG_OUT_OF_BOUNDS>"
 
-def process_file_worker(filepath, geo_kmeans, inv_kmeans):
+def process_file_worker(filepath: str, geo_kmeans: KMeans, inv_kmeans: KMeans) -> Optional[Dict[str, Any]]:
     try:
         nodes, children, roots = parse_swc(filepath)
         if not roots:
@@ -250,7 +251,7 @@ def process_file_worker(filepath, geo_kmeans, inv_kmeans):
         print(f"Error processing {filepath}: {e}")
         return None
 
-def train_vocabularies(swc_files):
+def train_vocabularies(swc_files: List[str]) -> Tuple[KMeans, KMeans]:
     if os.path.exists(GEO_VOCAB_MODEL_PATH) and os.path.exists(INV_VOCAB_MODEL_PATH):
         print("Loading existing vocabulary models...")
         return joblib.load(GEO_VOCAB_MODEL_PATH), joblib.load(INV_VOCAB_MODEL_PATH)
@@ -315,7 +316,7 @@ def train_vocabularies(swc_files):
     
     return geo_kmeans, inv_kmeans
 
-def main():
+def main() -> None:
     print(f"Finding SWC files in {SWC_DIR}...")
     swc_files = []
     for root, dirs, files in os.walk(SWC_DIR):

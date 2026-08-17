@@ -21,7 +21,9 @@ print(f"Loading vocabulary model from {GEO_VOCAB_MODEL_PATH}...")
 kmeans = joblib.load(GEO_VOCAB_MODEL_PATH)
 cluster_centers = kmeans.cluster_centers_
 
-def detokenize_to_swc(sequence, output_file):
+from typing import List
+
+def detokenize_to_swc(sequence: List[List[str]], output_file: str) -> None:
     """
     Converts a multi-stream sequence of tokens back into an SWC file format.
     Uses the GEO stream (index 1) for reconstruction.
