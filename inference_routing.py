@@ -1,3 +1,11 @@
+"""
+Author: Samik Banerjee
+Date of creation: August 2026
+How to run it: python inference_routing.py
+Input: Vesselness map and two coordinates (p1, p2)
+Output: Traced optimal path connecting fragments
+"""
+
 import numpy as np
 import tifffile
 from skimage.graph import route_through_array

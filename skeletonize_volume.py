@@ -1,3 +1,11 @@
+"""
+Author: Samik Banerjee
+Date of creation: August 2026
+How to run it: python skeletonize_volume.py
+Input: Raw TIFF volume (e.g., config.json specified)
+Output: Unsupervised skeleton fragments in extracted_fragments.swc
+"""
+
 import numpy as np
 import tifffile
 from skimage.filters import frangi

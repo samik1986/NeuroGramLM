@@ -1,3 +1,11 @@
+"""
+Author: Samik Banerjee
+Date of creation: August 2026
+How to run it: python train.py
+Input: SWC tokenized dataset
+Output: Trained NeuroGram Transformer model weights
+"""
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader

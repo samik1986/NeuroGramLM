@@ -1,3 +1,11 @@
+"""
+Author: Samik Banerjee
+Date of creation: August 2026
+How to run it: python dataset.py
+Input: JSONL tokenized dataset
+Output: PyTorch DataLoader with Graph Laplacian Positional Encoding
+"""
+
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 

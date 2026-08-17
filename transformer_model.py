@@ -1,3 +1,11 @@
+"""
+Author: Samik Banerjee
+Date of creation: August 2026
+How to run it: python transformer_model.py
+Input: Tokenized NeuroGram data
+Output: Multi-stream Transformer Neural Network model
+"""
+
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
