@@ -4,6 +4,9 @@ SWCs/
 
 # Ignore tokenized output and models
 *.json
+*.jsonl
+*.pkl
+*.nrrd
 *.parquet
 *.pt
 *.pth

@@ -6,9 +6,10 @@
     "MULTIPROCESSING": "Enabled by default. Python's ProcessPoolExecutor uses all available CPU cores for Phase B (Sequence Generation), bypassing the GIL and speeding up the 180k processing by 10-20x."
   },
   "SWC_DIR": "SWCs/",
-  "NUM_CLUSTERS": 128,
+  "NUM_CLUSTERS": 512,
   "JUMP_BIN_SIZE": 10.0,
-  "VOCAB_MODEL_PATH": "kmeans_vocab.pkl",
+  "GEO_VOCAB_MODEL_PATH": "kmeans_geo_vocab.pkl",
+  "INV_VOCAB_MODEL_PATH": "kmeans_inv_vocab.pkl",
   "VOCAB_TRAIN_FILES": 1000,
   "MAX_SAMPLES_FOR_KMEANS": 100000,
   "MAX_WORKERS": 16,
