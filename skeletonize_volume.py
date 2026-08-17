@@ -25,8 +25,9 @@ def extract_skeletons_from_volume(volume_path: Optional[str] = None, chunk_size:
     if os.path.exists("config.json"):
         with open("config.json", "r") as f:
             config = json.load(f)
-            volume_path = volume_path or config.get("volume_path")
-            spacing = config.get("spacing_xyz", spacing)
+            io_cfg = config.get("input_output", {})
+            volume_path = volume_path or io_cfg.get("volume_path")
+            spacing = io_cfg.get("spacing_xyz", spacing)
             
     volume_path = volume_path or "dummy.tif"
     print(f"Loading raw volume: {volume_path}")

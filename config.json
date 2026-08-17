@@ -1,4 +1,34 @@
 {
-    "volume_path": "c:\\Users\\banerjee\\Desktop\\Current Work\\um1_3d_volume\\data_046\\F0046_multichannel_cmle_ch03.tif",
-    "spacing_xyz": [0.11, 0.11, 0.5]
+    "input_output": {
+        "volume_path": "c:\\Users\\banerjee\\Desktop\\Current Work\\um1_3d_volume\\data_046\\F0046_multichannel_cmle_ch03.tif",
+        "spacing_xyz": [0.11, 0.11, 0.5],
+        "extracted_fragments_path": "extracted_fragments.swc",
+        "final_merged_path": "final_merged_neuron.swc"
+    },
+    "tokenization": {
+        "geo_vocab_size": 8000,
+        "inv_vocab_size": 2000,
+        "reg_vocab_size": 1500,
+        "max_context_length": 2048,
+        "laplacian_k": 8
+    },
+    "transformer": {
+        "d_model": 512,
+        "nhead": 8,
+        "num_layers": 6,
+        "dropout": 0.1
+    },
+    "unsupervised_detection": {
+        "frangi_sigmas": [1, 2, 3],
+        "vesselness_threshold_percentile": 99.9,
+        "chunk_size": 128
+    },
+    "routing_connections": {
+        "cost_epsilon": 0.000001,
+        "use_atlas_space_fallback": true
+    },
+    "assumptions": {
+        "topology_preserve": true,
+        "brain_region_limit": 60000
+    }
 }
