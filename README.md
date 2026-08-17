@@ -54,6 +54,20 @@ python merge_fragments.py
 
 ---
 
+## Phase 3: Evaluation & Metrics
+
+To validate the model's performance and ensure the Vector Quantization preserves biological topology, you can compare the reconstructed/merged SWCs against the ground truth.
+
+### Topology Comparison (`compare_swc.py`)
+This script compares original `.swc` files against the generated ones and prints out topological comparison metrics (Node Count, Total Path Length in microns, and Bounding Box Extent).
+```bash
+python compare_swc.py
+```
+- **Input**: Original `.swc` files (e.g., in `SWCs/`) and reconstructed `detokenized_*.swc` or merged files.
+- **Output**: Terminal printout of topology comparison metrics.
+
+---
+
 ## Configuration Reference (`config.json`)
 All parameters are centralized in `config.json` for easy experiment tracking.
 - `input_output.volume_path`: Path to the raw TIFF volume (e.g. your channel 3 multi-channel TIFF).
@@ -61,3 +75,9 @@ All parameters are centralized in `config.json` for easy experiment tracking.
 - `tokenization.max_context_length`: The chunk size (2048) to prevent OOM errors.
 - `transformer`: Model architecture dimensions (layers, heads, d_model).
 - `unsupervised_detection.frangi_sigmas`: Scales for the 3D ridge detection filter.
+
+---
+
+## Hardware Notes
+- **OOM Prevention**: The NeuroGram transformer incorporates sliding 2048-token context windows and memory-efficient Graph Laplacian positional encodings ($k=8$).
+- **Target GPU**: The model guarantees an execution footprint of ~8.1 GB VRAM for a batch size of 8, allowing the full pipeline to run efficiently on a 16GB GPU (like the RTX 4090) without Out-of-Memory crashes.
