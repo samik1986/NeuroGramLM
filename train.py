@@ -58,7 +58,8 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim
         batch_count += 1
         
         if batch_count % 10 == 0:
-            print(f"Batch {batch_count} | Loss: {loss.item():.4f} | Time: {time.time()-start:.2f}s")
+            mem_mb = torch.cuda.memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0
+            print(f"Batch {batch_count} | Loss: {loss.item():.4f} | Time: {time.time()-start:.2f}s | GPU Mem: {mem_mb:.1f} MB")
             start = time.time()
             
     return total_loss / max(1, batch_count)
@@ -78,12 +79,15 @@ def main() -> None:
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    dataset = NeuroGramDataset("dummy_dataset.jsonl", max_length=128) # small context for fast test
+    dataset = NeuroGramDataset("tokenized_dataset.jsonl", max_length=2048)
     dataloader = DataLoader(dataset, batch_size=4)
     
-    print("Running a dummy training epoch to check for OOM and gradient flow...")
+    print("Running training epoch on the full dataset. Monitoring GPU Memory...")
     loss = train_epoch(model, dataloader, optimizer, device)
-    print(f"Training Loop Test Success! Average Loss: {loss:.4f}")
+    print(f"Training Loop Success! Average Loss: {loss:.4f}")
+    
+    torch.save(model.state_dict(), "neurogram_model_weights.pth")
+    print("Model saved to neurogram_model_weights.pth!")
 
 if __name__ == "__main__":
     main()

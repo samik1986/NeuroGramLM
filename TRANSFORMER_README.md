@@ -83,11 +83,3 @@ This is the final script that unifies the unsupervised topological fragments wit
 4. The predicted anchor token is matched against the root nodes of all other unmerged fragments to find the most probable, biologically-grammatical connection.
 5. The `inference_routing` engine is invoked to route a physical spline through the raw intensity volume linking the leaf to the predicted root.
 6. The fully joined neuron graph is saved to `final_merged_neuron.swc`.
-
-## Step 7: Evaluation & Metrics (`compare_swc.py`)
-
-### Overview
-After the transformer has reconstructed or merged SWCs, we must computationally validate the topological accuracy against ground-truth SWCs.
-
-### Implementation
-The `compare_swc.py` script parses both the original and reconstructed `.swc` files, and automatically prints quantitative comparison metrics for Node Count, Total Path Length in microns, and Bounding Box Extents (X,Y,Z).
