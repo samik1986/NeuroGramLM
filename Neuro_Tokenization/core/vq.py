@@ -48,8 +48,8 @@ class MultimodalVQ:
         """Incrementally trains the codebooks on new features using a buffer."""
         for modality, data in features_dict.items():
             if modality in self.codebooks and data is not None and len(data) > 0:
-                # Ensure data is 2D
-                X = np.array(data)
+                # Ensure data is 2D and float32 for MiniBatchKMeans
+                X = np.array(data, dtype=np.float32)
                 if X.ndim == 1:
                     X = X.reshape(-1, 1)
                 # Filter out NaNs if any
@@ -69,7 +69,7 @@ class MultimodalVQ:
             # but if it has already been initialized, fewer samples are fine.
             # To be safe, we only fit if it meets the cluster size or if it's already initialized.
             if len(data) >= self.vocab_sizes[modality] or (hasattr(self.codebooks[modality], 'cluster_centers_') and len(data) > 0):
-                X_batch = np.array(data)
+                X_batch = np.array(data, dtype=np.float32)
                 self.codebooks[modality].partial_fit(X_batch)
             self.buffer[modality] = []
 
@@ -85,8 +85,8 @@ class MultimodalVQ:
         discrete_ids = {}
         for modality, value in token_features.items():
             if modality in self.codebooks and value is not None:
-                # Reshape to 2D for scikit-learn
-                X = np.array(value)
+                # Reshape to 2D and ensure float32
+                X = np.array(value, dtype=np.float32)
                 if X.ndim == 0:
                     X = X.reshape(1, -1)
                 elif X.ndim == 1:

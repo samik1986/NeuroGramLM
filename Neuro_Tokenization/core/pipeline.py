@@ -29,6 +29,16 @@ class TokenizationPipeline:
         """Runs the mathematical feature extraction step."""
         logging.info(f"Extracting features for {len(points)} points...")
         
+        # Attempt to use GPU acceleration via PyTorch if available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                from .features import compute_features_gpu
+                return compute_features_gpu(points, self.config)
+        except ImportError:
+            pass
+            
+        # Fallback to CPU numpy
         # 1. Tortuosity
         w_size = self.config['algorithm_parameters'].get('tortuosity_window_size', 5)
         tortuosity = compute_tortuosity(points, window_size=w_size)

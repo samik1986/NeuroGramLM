@@ -10,6 +10,7 @@ import os
 import glob
 import numpy as np
 from core.pipeline import TokenizationPipeline
+import concurrent.futures
 
 # Setup logging for live monitoring
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
@@ -78,39 +79,13 @@ def extract_fragments_from_swc(filepath):
             
     return fragments
 
-def main():
-    logging.info("Starting Neuro_Tokenization batch pipeline...")
-    
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-        
-    input_dir = config['io_paths']['input_directory']
-    output_dir = config['io_paths']['output_directory']
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
-    pipeline = TokenizationPipeline(config)
-    
-    # Find all SWC files recursively
-    search_pattern = os.path.join(input_dir, '**', '*.swc')
-    swc_files = glob.glob(search_pattern, recursive=True)
-    
-    if not swc_files:
-        logging.warning(f"No SWC files found in {input_dir}")
-        return
-        
-    logging.info(f"Found {len(swc_files)} SWC files. Beginning processing...")
-    
-    success_count = 0
-    
-    # Process files (just limit to 10 for demonstration/testing if there are thousands)
-    for i, swc_file in enumerate(swc_files):
-        logging.info(f"Processing ({i+1}/{len(swc_files)}): {swc_file}")
-        
+def process_single_file(args):
+    swc_file, config, output_dir = args
+    try:
+        pipeline = TokenizationPipeline(config)
         fragments = extract_fragments_from_swc(swc_file)
         if len(fragments) == 0:
-            logging.warning(f"Skipping empty or invalid file: {swc_file}")
-            continue
+            return 0
             
         all_tokens = []
         overall_quality = []
@@ -122,7 +97,6 @@ def main():
                 overall_quality.append(result['quality_score'])
                 
         if len(all_tokens) > 0:
-            # Save the tokens
             out_filename = os.path.basename(swc_file).replace('.swc', '_tokens.json')
             out_path = os.path.join(output_dir, out_filename)
             
@@ -133,11 +107,41 @@ def main():
                     'total_tokens': len(all_tokens),
                     'tokens': all_tokens
                 }, f, indent=2)
-                
-            logging.info(f"Saved {len(all_tokens)} tokens from {len(fragments)} fragments to {out_path}")
-            success_count += 1
-        else:
-            logging.error(f"Pipeline failed for all fragments in {swc_file}")
+            return 1
+        return 0
+    except Exception as e:
+        logging.error(f"Failed processing {swc_file}: {e}")
+        return 0
+
+def main():
+    logging.info("Starting Neuro_Tokenization batch pipeline...")
+    
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        
+    input_dir = config['io_paths']['input_directory']
+    output_dir = config['io_paths']['output_directory']
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    search_pattern = os.path.join(input_dir, '**', '*.swc')
+    swc_files = glob.glob(search_pattern, recursive=True)
+    
+    if not swc_files:
+        logging.warning(f"No SWC files found in {input_dir}")
+        return
+        
+    logging.info(f"Found {len(swc_files)} SWC files. Beginning parallel processing...")
+    
+    success_count = 0
+    args_list = [(f, config, output_dir) for f in swc_files]
+    
+    # Process files in parallel
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        for i, result in enumerate(executor.map(process_single_file, args_list)):
+            success_count += result
+            if (i + 1) % 100 == 0:
+                logging.info(f"Progress: {i+1}/{len(swc_files)} files processed.")
             
     logging.info(f"Batch processing complete. Successfully processed {success_count}/{len(swc_files)} files.")
 

@@ -28,10 +28,10 @@ def main():
     logging.info(f"Scanning {swc_dir} for SWC files...")
     all_files = get_all_swc_files(swc_dir)
     
-    sample_size = max(1, int(len(all_files) * sample_ratio))
+    sample_size = min(500, max(1, int(len(all_files) * sample_ratio)))
     sampled_files = random.sample(all_files, sample_size)
     
-    logging.info(f"Sampled {len(sampled_files)} files ({sample_ratio*100}%) for training codebooks.")
+    logging.info(f"Sampled {len(sampled_files)} files (max capped at 500) for training codebooks.")
     
     from run_pipeline import extract_fragments_from_swc
     

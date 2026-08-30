@@ -109,3 +109,76 @@ def compute_branching_angle(v_in, v_out):
     # Clip for numerical stability
     cos_theta = np.clip(cos_theta, -1.0, 1.0)
     return np.arccos(cos_theta)
+
+def compute_features_gpu(points, config):
+    """
+    Computes all geometric features concurrently on the GPU using PyTorch.
+    Uses lazy importing so it doesn't crash if torch is not installed.
+    """
+    import torch
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    pts = torch.tensor(points, dtype=torch.float32, device=device)
+    N = pts.shape[0]
+    
+    features = {}
+    
+    # 1. Tortuosity
+    w_size = config['algorithm_parameters'].get('tortuosity_window_size', 5)
+    tortuosity = torch.ones(N, device=device)
+    if N >= 2:
+        half_win = w_size // 2
+        for i in range(N):
+            start = max(0, i - half_win)
+            end = min(N - 1, i + half_win)
+            if end - start >= 1:
+                seg = pts[start:end+1]
+                diffs = seg[1:] - seg[:-1]
+                l_arc = torch.norm(diffs, dim=1).sum()
+                l_chord = torch.norm(seg[-1] - seg[0])
+                if l_chord > 1e-6:
+                    tortuosity[i] = l_arc / l_chord
+    features['tortuosity'] = tortuosity.cpu().numpy()
+    
+    # 2. Curvature Energy
+    curvature = torch.zeros(N, device=device)
+    if N >= 3:
+        v = torch.zeros_like(pts)
+        v[1:-1] = (pts[2:] - pts[:-2]) / 2.0
+        v[0] = pts[1] - pts[0]
+        v[-1] = pts[-1] - pts[-2]
+        
+        a = torch.zeros_like(v)
+        a[1:-1] = (v[2:] - v[:-2]) / 2.0
+        a[0] = v[1] - v[0]
+        a[-1] = v[-1] - v[-2]
+        
+        v_norm = torch.norm(v, dim=1)
+        cross_prod = torch.cross(v, a, dim=1)
+        kappa = torch.norm(cross_prod, dim=1) / (v_norm**3 + 1e-8)
+        curvature = kappa ** 2
+    features['curvature_energy'] = curvature.cpu().numpy()
+    
+    # 3. Inertia Tensor
+    radius = config['algorithm_parameters'].get('inertia_radius', 10.0)
+    dists = torch.cdist(pts, pts)
+    mask = dists <= radius
+    
+    inertia_tensors = []
+    I3 = torch.eye(3, device=device)
+    for i in range(N):
+        neighbors = pts[mask[i]]
+        if len(neighbors) < 3:
+            inertia_tensors.append(np.zeros(3))
+            continue
+            
+        centered = neighbors - pts[i]
+        r_sq = torch.sum(centered**2, dim=1)
+        outer_prods = centered.unsqueeze(2) * centered.unsqueeze(1)
+        tensor = torch.sum(r_sq.view(-1, 1, 1) * I3 - outer_prods, dim=0)
+        
+        eigenvalues = torch.linalg.eigvalsh(tensor)
+        eigenvalues = torch.sort(eigenvalues, descending=True).values
+        inertia_tensors.append(eigenvalues.cpu().numpy())
+        
+    features['inertia_tensor'] = inertia_tensors
+    return features
