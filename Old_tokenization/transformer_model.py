@@ -77,6 +77,10 @@ class NeuroGramTransformer(nn.Module):
         padding_mask: (B, L) Boolean tensor where True means padded token
         causal_mask: (L, L) Tensor preventing attention to future tokens
         """
+        if causal_mask is None:
+            sz = x.size(1)
+            causal_mask = torch.triu(torch.full((sz, sz), float('-inf'), device=x.device), diagonal=1)
+            
         h = self.embedding(x)
         h = h + self.laplacian_pe(pe)
         

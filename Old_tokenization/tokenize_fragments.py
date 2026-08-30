@@ -197,7 +197,36 @@ def extract_all_vectors(filepath: str) -> Tuple[List[List[float]], List[List[flo
         
     return all_rel_locs, all_dirs, all_morphs
 
-def train_vocabularies(swc_files: List[str]) -> Tuple[KMeans, KMeans, KMeans]:
+def pytorch_kmeans(X_np, n_clusters, max_iters=100, tol=1e-4):
+    if len(X_np) == 0:
+        return {"cluster_centers_": np.zeros((n_clusters, 1))}
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    X = torch.tensor(X_np, dtype=torch.float32, device=device)
+    N, D = X.shape
+    n_clusters = min(n_clusters, N)
+    
+    indices = torch.randperm(N)[:n_clusters]
+    centers = X[indices].clone()
+    
+    for _ in range(max_iters):
+        dist = torch.cdist(X, centers)
+        labels = torch.argmin(dist, dim=1)
+        
+        new_centers = torch.zeros_like(centers)
+        counts = torch.bincount(labels, minlength=n_clusters).float().unsqueeze(1)
+        counts[counts == 0] = 1.0
+        
+        new_centers.scatter_add_(0, labels.unsqueeze(1).expand(-1, D), X)
+        new_centers /= counts
+        
+        center_shift = torch.sum((centers - new_centers) ** 2)
+        centers = new_centers
+        if center_shift < tol:
+            break
+            
+    return {"cluster_centers_": centers.cpu().numpy()}
+
+def train_vocabularies(swc_files: List[str]) -> Tuple[Dict, Dict, Dict]:
     print(f"Phase A: Training Vocabularies on {VOCAB_TRAIN_FILES} files...")
     
     folder_map = defaultdict(list)
@@ -247,16 +276,13 @@ def train_vocabularies(swc_files: List[str]) -> Tuple[KMeans, KMeans, KMeans]:
     X_morph = get_train_sample(total_morphs)
     
     print("Training REL_LOC K-Means...")
-    loc_kmeans = KMeans(n_clusters=min(NUM_CLUSTERS, len(X_loc)), random_state=42, n_init=10)
-    loc_kmeans.fit(X_loc)
+    loc_kmeans = pytorch_kmeans(X_loc, NUM_CLUSTERS)
     
     print("Training DIR K-Means...")
-    dir_kmeans = KMeans(n_clusters=min(NUM_CLUSTERS, len(X_dir)), random_state=42, n_init=10)
-    dir_kmeans.fit(X_dir)
+    dir_kmeans = pytorch_kmeans(X_dir, NUM_CLUSTERS)
 
     print("Training MORPH K-Means...")
-    morph_kmeans = KMeans(n_clusters=min(NUM_CLUSTERS, len(X_morph)), random_state=42, n_init=10)
-    morph_kmeans.fit(X_morph)
+    morph_kmeans = pytorch_kmeans(X_morph, NUM_CLUSTERS)
     
     joblib.dump(loc_kmeans, REL_LOC_VOCAB_PATH)
     joblib.dump(dir_kmeans, DIR_VOCAB_PATH)
@@ -265,7 +291,7 @@ def train_vocabularies(swc_files: List[str]) -> Tuple[KMeans, KMeans, KMeans]:
     
     return loc_kmeans, dir_kmeans, morph_kmeans
 
-def process_file_worker(filepath: str, loc_kmeans: KMeans, dir_kmeans: KMeans, morph_kmeans: KMeans) -> Optional[Dict[str, Any]]:
+def process_file_worker(filepath: str, loc_kmeans: Dict, dir_kmeans: Dict, morph_kmeans: Dict) -> Optional[Dict[str, Any]]:
     try:
         nodes, children, roots = parse_swc(filepath)
         fragments = extract_fragments(nodes, children, roots)
@@ -278,9 +304,13 @@ def process_file_worker(filepath: str, loc_kmeans: KMeans, dir_kmeans: KMeans, m
             if not rel_locs:
                 continue
                 
-            loc_ids = loc_kmeans.predict(np.array(rel_locs))
-            dir_ids = dir_kmeans.predict(np.array(dirs))
-            morph_ids = morph_kmeans.predict(np.array(morphs))
+            loc_centers = loc_kmeans["cluster_centers_"]
+            dir_centers = dir_kmeans["cluster_centers_"]
+            morph_centers = morph_kmeans["cluster_centers_"]
+            
+            loc_ids = np.argmin(cdist(np.array(rel_locs), loc_centers), axis=1)
+            dir_ids = np.argmin(cdist(np.array(dirs), dir_centers), axis=1)
+            morph_ids = np.argmin(cdist(np.array(morphs), morph_centers), axis=1)
             
             frag_seq = [frag["start_type"]]
             for i in range(len(rel_locs)):

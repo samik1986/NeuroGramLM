@@ -16,7 +16,7 @@ def detokenize_file(data):
     nodes = {}
     
     loc_kmeans = joblib.load(REL_LOC_VOCAB_PATH)
-    loc_centers = loc_kmeans.cluster_centers_
+    loc_centers = loc_kmeans["cluster_centers_"]
     
     # We will generate sequential IDs for nodes to build the SWC,
     # but we need to map the original start/end/parent nodes to our new IDs.

@@ -39,12 +39,9 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim
         
         pad_mask = (src[:, :, 1] == SPECIAL_TOKENS["<PAD>"])
         
-        seq_len = src.size(1)
-        causal_mask = generate_square_subsequent_mask(seq_len).to(device)
-        
         optimizer.zero_grad()
         
-        inv_logits, geo_logits, reg_logits = model(src, src_pe, padding_mask=pad_mask, causal_mask=causal_mask)
+        inv_logits, geo_logits, reg_logits = model(src, src_pe, padding_mask=pad_mask)
         
         inv_loss = criterion_inv(inv_logits.reshape(-1, inv_logits.size(-1)), targets[:, :, 0].reshape(-1))
         geo_loss = criterion_geo(geo_logits.reshape(-1, geo_logits.size(-1)), targets[:, :, 1].reshape(-1))
@@ -76,18 +73,33 @@ def main() -> None:
         d_model=512,
         n_heads=8,
         num_layers=6
-    ).to(device)
+    )
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
+    model = model.to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     dataset = NeuroGramDataset("tokenized_dataset.jsonl", max_length=2048)
-    dataloader = DataLoader(dataset, batch_size=4)
+    dataloader = DataLoader(dataset, batch_size=128, num_workers=16, prefetch_factor=2)
     
-    print("Running training epoch on the full dataset. Monitoring GPU Memory...")
-    loss = train_epoch(model, dataloader, optimizer, device)
-    print(f"Training Loop Success! Average Loss: {loss:.4f}")
+    num_epochs = 1000
+    print(f"Running training for {num_epochs} epochs. Monitoring GPU Memory...")
     
+    with open("training_losses.txt", "a") as log_file:
+        for epoch in range(1, num_epochs + 1):
+            loss = train_epoch(model, dataloader, optimizer, device)
+            print(f"Epoch {epoch} Success! Average Loss: {loss:.4f}")
+            log_file.write(f"Epoch {epoch} Average Loss: {loss:.4f}\n")
+            log_file.flush()
+            
+            if epoch % 5 == 0:
+                save_path = "neurogram_model_weights.pth"
+                torch.save(model.state_dict(), save_path)
+                print(f"Model saved to {save_path}!")
+                
     torch.save(model.state_dict(), "neurogram_model_weights.pth")
-    print("Model saved to neurogram_model_weights.pth!")
+    print("Training finished. Final model saved to neurogram_model_weights.pth!")
 
 if __name__ == "__main__":
     main()

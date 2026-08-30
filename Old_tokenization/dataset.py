@@ -115,8 +115,14 @@ class NeuroGramDataset(IterableDataset):
         self.max_length = max_length
         
     def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+
         with open(self.jsonl_path, "r", encoding="utf-8") as f:
-            for line in f:
+            for i, line in enumerate(f):
+                if i % num_workers != worker_id:
+                    continue
                 try:
                     data = json.loads(line)
                     seq = data.get("sequence", [])

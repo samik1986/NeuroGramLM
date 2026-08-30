@@ -1,5 +1,6 @@
 # Ignore the massive SWC dataset
 SWCs/
+SWCs_test/
 *.swc
 
 # Ignore tokenized output and models
