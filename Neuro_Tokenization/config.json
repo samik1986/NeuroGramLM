@@ -1,0 +1,28 @@
+{
+  "io_paths": {
+    "input_swc_dir": "../SWCs",
+    "output_token_dir": "./data/tokenized_output"
+  },
+  "algorithm_parameters": {
+    "tortuosity_window_size": 5,
+    "curvature_smoothing_sigma": 2.0,
+    "inertia_radius": 10.0
+  },
+  "quality_thresholds": {
+    "min_modality_completeness": 0.5,
+    "max_tortuosity_allowed": 5.0,
+    "min_nodes_per_fragment": 3
+  },
+  "tokenization_parameters": {
+    "mask_modality_value": 0.0
+  },
+  "vector_quantization": {
+    "model_dir": "./data/models",
+    "sample_ratio": 0.05,
+    "vocab_sizes": {
+      "tortuosity": 256,
+      "curvature_energy": 256,
+      "inertia_tensor": 512
+    }
+  }
+}
