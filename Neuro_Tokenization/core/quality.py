@@ -50,7 +50,7 @@ def evaluate_token_quality(tokens, config):
     score = max(0.0, score)
     
     # Decision
-    is_valid = score >= thresholds['min_biological_score']
+    is_valid = score >= thresholds.get('min_biological_score', 0.5)
     
     return score, {
         'is_valid': is_valid,

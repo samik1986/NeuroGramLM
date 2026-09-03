@@ -57,10 +57,10 @@ class MultimodalVQ:
                 if len(X) > 0:
                     self.buffer[modality].extend(X)
                     
-            if len(self.buffer[modality]) >= self.buffer_size:
-                X_batch = np.array(self.buffer[modality])
-                self.codebooks[modality].partial_fit(X_batch)
-                self.buffer[modality] = []
+                if len(self.buffer[modality]) >= self.buffer_size:
+                    X_batch = np.array(self.buffer[modality])
+                    self.codebooks[modality].partial_fit(X_batch)
+                    self.buffer[modality] = []
                 
     def flush_buffer(self):
         """Processes any remaining samples in the buffer."""

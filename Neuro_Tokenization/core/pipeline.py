@@ -34,7 +34,14 @@ class TokenizationPipeline:
             import torch
             if torch.cuda.is_available():
                 from .features import compute_features_gpu
-                return compute_features_gpu(points, self.config)
+                try:
+                    return compute_features_gpu(points, self.config)
+                except RuntimeError as e:
+                    if 'out of memory' in str(e).lower():
+                        # Free up any allocated memory before falling back
+                        torch.cuda.empty_cache()
+                    else:
+                        logging.warning(f"GPU error, falling back to CPU: {e}")
         except ImportError:
             pass
             
@@ -62,7 +69,7 @@ class TokenizationPipeline:
         logging.info("Feature extraction complete.")
         return features
         
-    def process_fragment(self, points, available_modalities=['tortuosity', 'curvature_energy', 'inertia_tensor']):
+    def process_fragment(self, points, topology_features=None, available_modalities=['tortuosity', 'curvature_energy', 'inertia_tensor', 'strahler_order', 'wl_hash', 'background_intensity']):
         """
         Main pipeline function. 
         Takes a sequence of 3D coordinates (points) representing a fragment.
@@ -70,6 +77,8 @@ class TokenizationPipeline:
         try:
             # Step 1: Feature Extraction
             features = self.extract_features(points)
+            if topology_features:
+                features.update(topology_features)
             
             # Step 2: Tokenization & Masking
             logging.info("Assembling multimodal tokens...")

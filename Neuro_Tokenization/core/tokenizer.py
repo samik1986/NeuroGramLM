@@ -16,7 +16,10 @@ class MultimodalTokenizer:
             'tortuosity': 1,
             'curvature_energy': 1,
             'inertia_tensor': 3, # 3 eigenvalues
-            'branching_angle': 1
+            'branching_angle': 1,
+            'strahler_order': 1,
+            'wl_hash': 1,
+            'background_intensity': 1
         }
         
     def register_modality(self, name, dim):

@@ -39,11 +39,13 @@ def main():
     processed_fragments = 0
     for i, swc_file in enumerate(sampled_files):
         fragments = extract_fragments_from_swc(swc_file)
-        for frag in fragments:
-            if len(frag) < config['quality_thresholds']['min_nodes_per_fragment']:
+        for frag_data in fragments:
+            points = frag_data['points']
+            if len(points) < config['quality_thresholds']['min_nodes_per_fragment']:
                 continue
                 
-            features = pipeline.extract_features(frag)
+            features = pipeline.extract_features(points)
+            features.update(frag_data['topology'])
             pipeline.vq.fit_partial(features)
             processed_fragments += 1
             
