@@ -58,6 +58,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, default=None, help="Path to checkpoint to resume/infer from.")
     parser.add_argument('--source_swc', type=str, default=None, help="Source SWC for inference bridging.")
     parser.add_argument('--tiff_volume', type=str, default=None, help="Bio volume TIFF for inference bridging.")
+    parser.add_argument('--resolution', type=float, nargs=3, default=None, help="XYZ physical resolution (microns/voxel)")
     
     args = parser.parse_args()
     
@@ -82,14 +83,24 @@ def main():
     elif args.step == 'infer':
         logger.info("Routing to Inference Engine...")
         script_path = os.path.join(base_dir, 'Neuro_Training', 'scripts', 'inference.py')
-        # In a real environment, inference.py should also take argparse arguments for these
-        logger.info(f"Note: Ensure inference.py is configured to read source: {args.source_swc} and TIFF: {args.tiff_volume}")
-        run_subprocess([sys.executable, script_path])
+        cmd = [sys.executable, script_path]
+        if args.source_swc:
+            cmd.extend(['--source_swc', args.source_swc])
+        if args.tiff_volume:
+            cmd.extend(['--tiff_volume', args.tiff_volume])
+        if args.resolution:
+            cmd.extend(['--resolution', str(args.resolution[0]), str(args.resolution[1]), str(args.resolution[2])])
+            
+        run_subprocess(cmd)
         
     elif args.step == 'retrain':
         logger.info("Routing to Incremental Retraining Pipeline...")
         script_path = os.path.join(base_dir, 'Neuro_Retraining', 'scripts', 'run_incremental.py')
-        run_subprocess([sys.executable, script_path])
+        cmd = [sys.executable, script_path]
+        if args.resolution:
+            cmd.extend(['--resolution', str(args.resolution[0]), str(args.resolution[1]), str(args.resolution[2])])
+            
+        run_subprocess(cmd)
         
     logger.info("Orchestrator finished successfully.")
 

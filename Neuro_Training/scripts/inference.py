@@ -9,6 +9,8 @@ import sys
 import numpy as np
 import sys
 import numpy as np
+import argparse
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from Neuro_Model.model import NeuroGramLM
 from utils.logger import get_logger
@@ -191,6 +193,12 @@ class GapBridgingInferenceEngine:
             return None
 
 def main():
+    parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
+    parser.add_argument('--source_swc', type=str, default="data/raw/frag_001.swc", help="Source fragment SWC")
+    parser.add_argument('--tiff_volume', type=str, default="data/raw/brain_volume.tif", help="TIFF intensity volume")
+    parser.add_argument('--resolution', type=float, nargs=3, default=[1.0, 1.0, 1.0], help="XYZ physical resolution (microns/voxel)")
+    args = parser.parse_args()
+
     config_path = os.path.join(os.path.dirname(__file__), '../config.json')
     model_config_path = os.path.join(os.path.dirname(__file__), '../../Neuro_Model/config.json')
     
@@ -202,13 +210,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     engine = GapBridgingInferenceEngine(model_config, train_config['inference_parameters'], device)
     
-    # Mock inference execution with raw paths and resolution
-    source_swc = "data/raw/frag_001.swc"
+    # Mock candidate search database
     candidates = [f"data/raw/frag_{i:03d}.swc" for i in range(2, 20)]
-    tiff_vol = "data/raw/brain_volume.tif"
-    phys_res = (1.0, 1.0, 3.0) # Example: 1x1x3 microns per voxel
     
-    engine.bridge_gap(source_swc, candidates, tiff_vol, physical_resolution=phys_res)
+    phys_res = tuple(args.resolution)
+    engine.bridge_gap(args.source_swc, candidates, args.tiff_volume, physical_resolution=phys_res)
 
 if __name__ == "__main__":
     main()

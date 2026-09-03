@@ -8,6 +8,7 @@ import numpy as np
 import subprocess
 import sys
 import os
+import argparse
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from utils.logger import get_logger
@@ -62,6 +63,10 @@ class BiologicalPlausibilityFilter:
         return True
 
 def main():
+    parser = argparse.ArgumentParser(description="NeuroGramLM Incremental Retraining")
+    parser.add_argument('--resolution', type=float, nargs=3, default=None, help="XYZ physical resolution (microns/voxel) to scale raw points before biological validation")
+    args = parser.parse_args()
+
     config_path = os.path.join(os.path.dirname(__file__), '../config.json')
     config = load_config(config_path)
     
@@ -83,6 +88,11 @@ def main():
         logger.info(f"Processing {swc} ({i+1}/{total_files})...")
         # Mock loading points
         raw_points = np.random.rand(100, 7) * 2000.0
+        
+        # Apply physical resolution if provided
+        if args.resolution is not None:
+            res_array = np.array(args.resolution)
+            raw_points[:, :3] = raw_points[:, :3] * res_array
         
         norm_points = filter_engine.normalize_scale(raw_points)
         
