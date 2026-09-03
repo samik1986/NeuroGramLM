@@ -57,12 +57,20 @@ class InferencePreprocessor:
         # Return a mocked 3D tensor representing the intensity crop
         return torch.randn(1, *patch_size)
 
-    def process_raw_swc(self, swc_path):
+    def process_raw_swc(self, swc_path, physical_resolution=None):
         """
-        Reads an SWC, normalizes scale, and tokenizes it on-the-fly.
+        Reads an SWC, applies physical resolution scaling if provided, normalizes scale, 
+        and tokenizes it on-the-fly.
+        physical_resolution: Tuple (rx, ry, rz) representing microns per voxel.
         """
         # Mock reading SWC
         raw_points = np.random.rand(100, 7) * 5000.0 # Arbitrary scale
+        
+        # Apply physical resolution if provided
+        if physical_resolution is not None:
+            res_array = np.array(physical_resolution)
+            raw_points[:, :3] = raw_points[:, :3] * res_array
+            
         norm_points = self.normalize_scale(raw_points)
         
         # In real scenario: tokens = self.tokenizer.tokenize(norm_points)
@@ -118,13 +126,13 @@ class GapBridgingInferenceEngine:
         # Mocking retrieval - returning a subset of paths
         return candidate_swc_paths[:self.knn_top_k]
 
-    def _biological_validation(self, source_tokens, candidate_paths, tiff_volume_path):
+    def _biological_validation(self, source_tokens, candidate_paths, tiff_volume_path, physical_resolution=None):
         best_candidate = None
         best_score = -float('inf')
         
         for candidate_path in candidate_paths:
             # On-the-fly tokenization of candidate
-            candidate_tokens = self.preprocessor.process_raw_swc(candidate_path)
+            candidate_tokens = self.preprocessor.process_raw_swc(candidate_path, physical_resolution=physical_resolution)
             
             # Extract TIFF intensity ridge between endpoints
             bio_volume = self.preprocessor.extract_tiff_patch(
@@ -150,12 +158,13 @@ class GapBridgingInferenceEngine:
                     
         return best_candidate, best_score
 
-    def bridge_gap(self, source_swc_path, candidate_swc_paths, tiff_volume_path):
+    def bridge_gap(self, source_swc_path, candidate_swc_paths, tiff_volume_path, physical_resolution=None):
         """
         Main inference entry point for a disconnected fragment (Raw SWC and TIFF).
+        physical_resolution: Tuple (rx, ry, rz) for true physical scale mapping.
         """
         print(f"Processing source fragment: {source_swc_path}")
-        source_tokens = self.preprocessor.process_raw_swc(source_swc_path)
+        source_tokens = self.preprocessor.process_raw_swc(source_swc_path, physical_resolution=physical_resolution)
         
         print("Stage 1: Predicting trajectory and searching latent space...")
         pred_latent = self._predict_next_latent(source_tokens)
@@ -163,7 +172,7 @@ class GapBridgingInferenceEngine:
         
         print(f"Stage 2: Validating {len(top_k_candidates)} candidates via Zero-Shot Bio Tower (TIFF crops)...")
         best_match, confidence = self._biological_validation(
-            source_tokens, top_k_candidates, tiff_volume_path
+            source_tokens, top_k_candidates, tiff_volume_path, physical_resolution=physical_resolution
         )
         
         if confidence >= self.threshold:
@@ -185,12 +194,13 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     engine = GapBridgingInferenceEngine(model_config, train_config['inference_parameters'], device)
     
-    # Mock inference execution with raw paths
+    # Mock inference execution with raw paths and resolution
     source_swc = "data/raw/frag_001.swc"
     candidates = [f"data/raw/frag_{i:03d}.swc" for i in range(2, 20)]
     tiff_vol = "data/raw/brain_volume.tif"
+    phys_res = (1.0, 1.0, 3.0) # Example: 1x1x3 microns per voxel
     
-    engine.bridge_gap(source_swc, candidates, tiff_vol)
+    engine.bridge_gap(source_swc, candidates, tiff_vol, physical_resolution=phys_res)
 
 if __name__ == "__main__":
     main()

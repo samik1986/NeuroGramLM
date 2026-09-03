@@ -17,6 +17,6 @@ This module contains the logic for training the `Neuro_Model` Encoder-Decoder Tr
 
 ## Inference Data Assumptions
 Unlike training, which uses pre-computed tokens from a CCFv3 dataset, the **inference engine operates on raw biological data:**
-- **Input Formats:** Accepts raw `.swc` files for neuron fragments and raw `.tif` (TIFF) files for volumetric microscopy intensity data.
-- **Scale Normalization:** Because test data might be captured at an arbitrary micron scale compared to CCFv3, the inference preprocessor automatically normalizes the spatial bounding box of the SWC. This prevents continuous metrics (like inertia or curvature energy) from exploding outside the bounds of the VQ codebooks.
+- **Input Formats:** Accepts raw `.swc` files for neuron fragments and raw `.tif` (TIFF) files for volumetric microscopy intensity data. The inference engine also accepts an optional `(x, y, z)` physical resolution mapping.
+- **Scale Normalization:** Because test data might be captured at an arbitrary micron scale compared to CCFv3, the inference preprocessor automatically applies any provided physical resolution scaling. It then normalizes the spatial bounding box of the SWC. This prevents continuous metrics (like inertia or curvature energy) from exploding outside the bounds of the VQ codebooks.
 - **Rotation Invariance:** No spatial alignment/registration is required before tokenization. Because the geometric tokenization pipeline relies exclusively on relative intrinsic features (branching angles, tortuosity, scalar curvature), the model is inherently translation and rotation invariant.
