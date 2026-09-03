@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import sys
+import argparse
 
 # Append the parent directory to sys.path so we can import Neuro_Model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -55,6 +56,10 @@ def train_epoch(model, dataloader, optimizer, device):
     return total_loss / len(dataloader)
 
 def main():
+    parser = argparse.ArgumentParser(description="NeuroGramLM Training Script")
+    parser.add_argument('--resume_from', type=str, default=None, help="Path to checkpoint (.pt) for incremental training")
+    args = parser.parse_args()
+
     # Setup
     config_path = os.path.join(os.path.dirname(__file__), '../config.json')
     model_config_path = os.path.join(os.path.dirname(__file__), '../../Neuro_Model/config.json')
@@ -66,7 +71,16 @@ def main():
     print(f"Using device: {device}")
     
     # Initialize Model
-    model = NeuroGramLM(model_config).to(device)
+    model = NeuroGramLM(model_config)
+    
+    if args.resume_from is not None:
+        if os.path.exists(args.resume_from):
+            print(f"Loading checkpoint for incremental training: {args.resume_from}")
+            model.load_state_dict(torch.load(args.resume_from, map_location=device))
+        else:
+            print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
+            
+    model = model.to(device)
     
     # Optimizer
     optimizer = optim.AdamW(
