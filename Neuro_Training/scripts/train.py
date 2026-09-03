@@ -14,19 +14,22 @@ import argparse
 # Append the parent directory to sys.path so we can import Neuro_Model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from Neuro_Model.model import NeuroGramLM
+from utils.logger import get_logger
+
+logger = get_logger("Trainer", module_name="Training")
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def train_epoch(model, dataloader, optimizer, device):
+def train_epoch(model, dataloader, optimizer, device, save_steps=None, save_dir=None, epoch=None):
     model.train()
     total_loss = 0.0
     
     # Progress bar for the epoch
     pbar = tqdm(dataloader, desc="Training")
     
-    for batch in pbar:
+    for step, batch in enumerate(pbar):
         # Move batch and targets to device
         batch = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
                  for k, v in batch['inputs'].items()}
@@ -57,7 +60,13 @@ def train_epoch(model, dataloader, optimizer, device):
         total_loss += loss.item()
         pbar.set_postfix({'loss': loss.item()})
         
-    return total_loss / len(dataloader)
+        # Save intermediate checkpoint
+        if save_steps and save_dir and (step + 1) % save_steps == 0:
+            ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}_step_{step + 1}.pt")
+            torch.save(model.state_dict(), ckpt_path)
+            logger.info(f"Saved intermediate checkpoint to {ckpt_path}")
+            
+    return total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Training Script")
@@ -72,17 +81,17 @@ def main():
     model_config = load_config(model_config_path)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    logger.info(f"Starting Training Process. Using device: {device}")
     
     # Initialize Model
     model = NeuroGramLM(model_config)
     
     if args.resume_from is not None:
         if os.path.exists(args.resume_from):
-            print(f"Loading checkpoint for incremental training: {args.resume_from}")
+            logger.info(f"Loading checkpoint for incremental training: {args.resume_from}")
             model.load_state_dict(torch.load(args.resume_from, map_location=device))
         else:
-            print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
+            logger.warning(f"Checkpoint {args.resume_from} not found. Starting from scratch.")
             
     model = model.to(device)
     
@@ -95,25 +104,28 @@ def main():
     
     # Dataloader (Mocked for architecture scaffolding)
     # dataloader = DataLoader(NeuroDataset(train_config['io_paths']['token_input_dir']), ...)
-    print("WARNING: Dataloader is a placeholder. Implement NeuroDataset.")
+    logger.warning("Dataloader is a placeholder. Implement NeuroDataset.")
     dataloader = [] 
     
     # Training Loop
     epochs = train_config['training_parameters']['epochs']
     save_dir = train_config['io_paths']['model_checkpoint_dir']
+    save_steps = train_config['training_parameters'].get('save_steps', 1000)
     os.makedirs(save_dir, exist_ok=True)
     
     for epoch in range(1, epochs + 1):
         if len(dataloader) > 0:
-            avg_loss = train_epoch(model, dataloader, optimizer, device)
-            print(f"Epoch {epoch}/{epochs} | Avg Loss: {avg_loss:.4f}")
+            avg_loss = train_epoch(model, dataloader, optimizer, device, save_steps=save_steps, save_dir=save_dir, epoch=epoch)
+            logger.info(f"Epoch {epoch}/{epochs} | Avg Loss: {avg_loss:.4f}")
         else:
-            print(f"Epoch {epoch}/{epochs} skipped (Empty Dataloader)")
+            logger.warning(f"Epoch {epoch}/{epochs} skipped (Empty Dataloader)")
             
         if epoch % train_config['training_parameters']['save_every'] == 0:
-            torch.save(model.state_dict(), os.path.join(save_dir, f"checkpoint_epoch_{epoch}.pt"))
+            ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}.pt")
+            torch.save(model.state_dict(), ckpt_path)
+            logger.info(f"Saved checkpoint to {ckpt_path}")
             
-    print("Training Complete.")
+    logger.info("Training Complete.")
 
 if __name__ == "__main__":
     main()

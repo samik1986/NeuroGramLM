@@ -7,15 +7,19 @@ import json
 import torch
 import sys
 import numpy as np
+import sys
+import numpy as np
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from Neuro_Model.model import NeuroGramLM
+from utils.logger import get_logger
+
+logger = get_logger("Inference_Engine", module_name="Training")
 
 # Mocking external libraries that would be used in a real environment
 try:
     import tifffile
 except ImportError:
-    print("WARNING: tifffile not installed. TIFF processing will be mocked.")
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-from Neuro_Model.model import NeuroGramLM
+    logger.warning("tifffile not installed. TIFF processing will be mocked.")
 
 class InferencePreprocessor:
     """
@@ -126,7 +130,7 @@ class GapBridgingInferenceEngine:
         return predicted_latent
 
     def _fast_latent_search(self, predicted_latent, candidate_swc_paths):
-        print(f"Searching database for Top {self.knn_top_k} matches...")
+        logger.info(f"Searching database for Top {self.knn_top_k} matches...")
         # Mocking retrieval - returning a subset of paths
         return candidate_swc_paths[:self.knn_top_k]
 
@@ -167,23 +171,23 @@ class GapBridgingInferenceEngine:
         Main inference entry point for a disconnected fragment (Raw SWC and TIFF).
         physical_resolution: Tuple (rx, ry, rz) for true physical scale mapping.
         """
-        print(f"Processing source fragment: {source_swc_path}")
+        logger.info(f"Processing source fragment: {source_swc_path}")
         source_tokens = self.preprocessor.process_raw_swc(source_swc_path, physical_resolution=physical_resolution)
         
-        print("Stage 1: Predicting trajectory and searching latent space...")
+        logger.info("Stage 1: Predicting trajectory and searching latent space...")
         pred_latent = self._predict_next_latent(source_tokens)
         top_k_candidates = self._fast_latent_search(pred_latent, candidate_swc_paths)
         
-        print(f"Stage 2: Validating {len(top_k_candidates)} candidates via Zero-Shot Bio Tower (TIFF crops)...")
+        logger.info(f"Stage 2: Validating {len(top_k_candidates)} candidates via Zero-Shot Bio Tower (TIFF crops)...")
         best_match, confidence = self._biological_validation(
             source_tokens, top_k_candidates, tiff_volume_path, physical_resolution=physical_resolution
         )
         
         if confidence >= self.threshold:
-            print(f"SUCCESS: Bridged to {best_match} (Confidence: {confidence:.2f})")
+            logger.info(f"SUCCESS: Bridged to {best_match} (Confidence: {confidence:.2f})")
             return best_match
         else:
-            print("FAILED: No confident matches found. Gap remains open.")
+            logger.warning("FAILED: No confident matches found. Gap remains open.")
             return None
 
 def main():

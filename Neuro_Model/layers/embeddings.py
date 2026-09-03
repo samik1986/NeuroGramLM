@@ -5,6 +5,12 @@ Date: 2026-09-03
 import torch
 import torch.nn as nn
 import math
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from utils.logger import get_logger
+logger = get_logger("Embedding_Layers", module_name="Model")
 
 class RotaryPositionEmbedding(nn.Module):
     """
@@ -58,6 +64,7 @@ class TopologicalEmbedding(nn.Module):
         super().__init__()
         self.strahler_emb = nn.Embedding(strahler_vocab_size, dim)
         self.wl_emb = nn.Embedding(wl_vocab_size, dim)
+        logger.info(f"Initialized TopologicalEmbedding [Strahler Vocab: {strahler_vocab_size}, WL Vocab: {wl_vocab_size}, Dim: {dim}]")
         
     def forward(self, strahler_indices, wl_indices):
         s_emb = self.strahler_emb(strahler_indices)
@@ -70,6 +77,7 @@ class GeometricEmbedding(nn.Module):
         self.tortuosity_emb = nn.Embedding(vocab_sizes['tortuosity'], dim)
         self.curvature_emb = nn.Embedding(vocab_sizes['curvature_energy'], dim)
         self.inertia_emb = nn.Embedding(vocab_sizes['inertia_tensor'], dim)
+        logger.info(f"Initialized GeometricEmbedding [Vocab Sizes: {vocab_sizes}, Dim: {dim}]")
         
     def forward(self, vq_ids):
         t_emb = self.tortuosity_emb(vq_ids['tortuosity'])
@@ -99,6 +107,7 @@ class BioEmbedding(nn.Module):
             nn.AdaptiveAvgPool3d(1) # Flatten spatial dims
         )
         self.projection = nn.Linear(out_c * 2, d_model)
+        logger.info(f"Initialized BioEmbedding 3D CNN [In Channels: {in_c}, Out Channels: {out_c}, Dim: {d_model}]")
 
     def forward(self, volume_patches):
         """

@@ -12,9 +12,12 @@ import numpy as np
 from core.pipeline import TokenizationPipeline
 import concurrent.futures
 import hashlib
+import sys
 
-# Setup logging for live monitoring
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+# Setup centralized logging
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils.logger import get_logger
+logger = get_logger("Tokenization_Pipeline", module_name="Tokenization")
 
 def extract_fragments_from_swc(filepath):
     """
@@ -53,7 +56,7 @@ def extract_fragments_from_swc(filepath):
                     if node_id not in children:
                         children[node_id] = []
     except Exception as e:
-        logging.error(f"Failed to parse {filepath}: {e}")
+        logger.error(f"Failed to parse {filepath}: {e}")
         return []
         
     # Find roots (nodes whose parent is -1 or not in the node list)
@@ -187,11 +190,11 @@ def process_single_file(args):
             return 1
         return 0
     except Exception as e:
-        logging.error(f"Failed processing {swc_file}: {e}")
+        logger.error(f"Failed processing {swc_file}: {e}")
         return 0
 
 def main():
-    logging.info("Starting Neuro_Tokenization batch pipeline...")
+    logger.info("Starting Neuro_Tokenization batch pipeline...")
     
     with open('config.json', 'r') as f:
         config = json.load(f)
@@ -205,10 +208,11 @@ def main():
     swc_files = glob.glob(search_pattern, recursive=True)
     
     if not swc_files:
-        logging.warning(f"No SWC files found in {input_dir}")
+        logger.warning(f"No SWC files found in {input_dir}")
         return
         
-    logging.info(f"Found {len(swc_files)} SWC files. Beginning parallel processing...")
+    total_files = len(swc_files)
+    logger.info(f"Found {total_files} SWC files. Beginning parallel processing...")
     
     success_count = 0
     args_list = [(f, config, output_dir) for f in swc_files]
@@ -217,10 +221,14 @@ def main():
     with concurrent.futures.ProcessPoolExecutor() as executor:
         for i, result in enumerate(executor.map(process_single_file, args_list)):
             success_count += result
-            if (i + 1) % 10 == 0 or result == 1:
-                logging.info(f"Progress: {i+1}/{len(swc_files)} files processed. (Successfully tokenized: {success_count})")
+            processed_file = args_list[i][0]
+            remaining = total_files - (i + 1)
             
-    logging.info(f"Batch processing complete. Successfully processed {success_count}/{len(swc_files)} files.")
+            # Explicit progress tracking as requested
+            logger.info(f"Processed file: {os.path.basename(processed_file)} | Status: {'Success' if result else 'Failed'} | "
+                        f"Progress: {i+1}/{total_files} | Remaining steps: {remaining}")
+            
+    logger.info(f"Batch processing complete. Successfully processed {success_count}/{total_files} files.")
 
 if __name__ == "__main__":
     main()

@@ -7,6 +7,12 @@ import json
 import numpy as np
 import subprocess
 import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from utils.logger import get_logger
+
+logger = get_logger("Incremental_Retraining", module_name="Retraining")
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -50,7 +56,7 @@ class BiologicalPlausibilityFilter:
         mock_max_tortuosity = np.random.uniform(1.0, 6.0)
         
         if mock_max_tortuosity > self.max_tortuosity:
-            print(f"Validation FAILED: Tortuosity ({mock_max_tortuosity:.2f}) exceeds CCFv3 bounds ({self.max_tortuosity}).")
+            logger.warning(f"Validation FAILED: Tortuosity ({mock_max_tortuosity:.2f}) exceeds CCFv3 bounds ({self.max_tortuosity}).")
             return False
             
         return True
@@ -66,37 +72,38 @@ def main():
     filter_engine = BiologicalPlausibilityFilter(bounds)
     
     # 1. Pre-process and Filter all new SWCs
-    print(f"Scanning for new raw SWCs in {raw_swc_dir}...")
+    logger.info(f"Scanning for new raw SWCs in {raw_swc_dir}...")
     valid_swcs = []
     
     # Mocking SWC discovery
     mock_swcs = [f"neuron_{i}.swc" for i in range(5)]
+    total_files = len(mock_swcs)
     
-    for swc in mock_swcs:
-        print(f"Processing {swc}...")
+    for i, swc in enumerate(mock_swcs):
+        logger.info(f"Processing {swc} ({i+1}/{total_files})...")
         # Mock loading points
         raw_points = np.random.rand(100, 7) * 2000.0
         
         norm_points = filter_engine.normalize_scale(raw_points)
         
         if filter_engine.validate_biological_metrics(norm_points):
-            print(f" -> {swc} is Biologically Plausible in CCFv3 space. Queuing for tokenization.")
+            logger.info(f" -> {swc} is Biologically Plausible in CCFv3 space. Queuing for tokenization.")
             valid_swcs.append(swc)
         else:
-            print(f" -> REJECTED: {swc} does not match CCFv3 biological distributions.")
+            logger.warning(f" -> REJECTED: {swc} does not match CCFv3 biological distributions.")
             
     if len(valid_swcs) == 0:
-        print("CRITICAL: No valid SWCs found that match the CCFv3 latent space. Aborting training.")
+        logger.error("CRITICAL: No valid SWCs found that match the CCFv3 latent space. Aborting training.")
         sys.exit(1)
         
-    print(f"\n{len(valid_swcs)}/{len(mock_swcs)} SWCs passed the Biological Filter.")
+    logger.info(f"\n{len(valid_swcs)}/{total_files} SWCs passed the Biological Filter.")
     
     # 2. Tokenization Phase
-    print("Tokenizing validated SWCs into VQ IDs (using Neuro_Tokenization)...")
+    logger.info("Tokenizing validated SWCs into VQ IDs (using Neuro_Tokenization)...")
     # Call to pipeline.py would go here...
     
     # 3. Incremental Training Phase
-    print(f"\nInitializing Continuous Learning. Resuming from {checkpoint}...")
+    logger.info(f"\nInitializing Continuous Learning. Resuming from {checkpoint}...")
     
     # Call the main training script with the resume_from flag
     train_script = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Neuro_Training/scripts/train.py'))
@@ -104,7 +111,7 @@ def main():
     # In a real environment we would launch the subprocess:
     # subprocess.run(["python", train_script, "--resume_from", checkpoint], check=True)
     
-    print("Incremental Training Complete! Model weights updated.")
+    logger.info("Incremental Training Complete! Model weights updated.")
 
 if __name__ == "__main__":
     main()

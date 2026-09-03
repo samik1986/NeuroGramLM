@@ -27,27 +27,29 @@ The continuous/incremental learning module.
 
 ---
 
-## How to Run
+## How to Run (Unified CLI)
 
-Here is the quickstart guide for executing the pipelines from the command line. Ensure your environments are activated and you are in the repository root.
+We have implemented a master orchestrator script `neurogram.py` at the root directory. You no longer need to `cd` into individual submodules. Instead, run the desired pipeline step directly from the root using the `--step` argument.
 
-### Training the Model
-To start a fresh training run using the defined hyperparameters:
+### 1. Tokenize Raw SWCs
 ```bash
-cd Neuro_Training
-python scripts/train.py
+python neurogram.py --step tokenize
+```
+*(Optionally override the input dir: `--input_dir data/my_swcs`)*
+
+### 2. Train the Model from Scratch
+```bash
+python neurogram.py --step train
+```
+*(Optionally override epochs: `--epochs 150`)*
+
+### 3. Run Inference (Gap Bridging)
+```bash
+python neurogram.py --step infer --source_swc data/raw/frag_001.swc --tiff_volume data/raw/brain.tif
 ```
 
-### Running Inference (Gap Bridging)
-To bridge broken gaps in raw SWC files utilizing the Zero-Shot Bio Tower (TIFF intensity crops):
+### 4. Incremental Retraining (New Data)
+Validate new, arbitrary-scaled SWCs against the CCFv3 latent space and resume training on them:
 ```bash
-cd Neuro_Training
-python scripts/inference.py
-```
-
-### Incremental Retraining (New Data)
-To validate new SWCs that might not be in CCF space, tokenize them, and incrementally update the model:
-```bash
-cd Neuro_Retraining
-python scripts/run_incremental.py
+python neurogram.py --step retrain --checkpoint checkpoints/latest.pt
 ```

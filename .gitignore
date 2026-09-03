@@ -16,5 +16,6 @@ SWCs_test/
 __pycache__/
 *.pyc
 *.log
+logs/
 scratch*.py
 .vscode/
