@@ -17,3 +17,10 @@ Unlike standard NLP models, neurons exist in 3D space and branch hierarchically.
 - `model.py`: The main `NeuroGramLM` orchestrator class.
 - `ALGORITHM.md`: Deep dive into the architectural flow and math.
 - `HOW_TO_UPDATE.md`: Instructions for modifying and extending the model.
+
+## Running the Model Tests Directly
+To run a forward-pass structural test of the PyTorch modules directly:
+```bash
+cd Neuro_Model
+python model.py
+```

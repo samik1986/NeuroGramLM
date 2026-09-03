@@ -36,7 +36,15 @@ The grammar output includes:
 - **Multiprocessing Tokenization**: Processing 180k+ SWC files is heavily I/O and JSON bound. The pipeline automatically leverages `concurrent.futures.ProcessPoolExecutor` to distribute the load across all available CPU cores.
 - **VQ Vocabulary Scaling**: The K-Means Codebook is strictly capped to train on a uniform random sample of 500 SWC files. Because every SWC file is an entire morphological tree, 500 files actually yield over 1 million continuous data points. For a cluster size of 512, this guarantees >2,000 samples per centroid, making underfitting mathematically impossible while saving massive amounts of VQ initialization time.
 
-## Walkthrough: How to Use
+## Running the Scripts Directly
+To execute the batch processing pipeline directly without the global orchestrator:
+```bash
+cd Neuro_Tokenization
+python run_pipeline.py
+```
+*(Ensure `config.json` is configured correctly before running)*
+
+## Walkthrough: How to Use in Python
 
 Here is a basic example of how to process an SWC fragment through the pipeline:
 
