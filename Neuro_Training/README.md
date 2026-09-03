@@ -17,8 +17,8 @@ This module contains the logic for training the `Neuro_Model` Encoder-Decoder Tr
 
 ## Inference Data Assumptions
 Unlike training, which uses pre-computed tokens from a CCFv3 dataset, the **inference engine operates on raw biological data:**
-- **Input Formats:** Accepts raw `.swc` files for neuron fragments and raw `.tif` (TIFF) files for volumetric microscopy intensity data. The inference engine also accepts an optional `(x, y, z)` physical resolution mapping.
-- **Scale Normalization:** Because test data might be captured at an arbitrary micron scale compared to CCFv3, the inference preprocessor automatically applies any provided physical resolution scaling. It then normalizes the spatial bounding box of the SWC. This prevents continuous metrics (like inertia or curvature energy) from exploding outside the bounds of the VQ codebooks.
+- **Input Formats:** Accepts raw `.swc` files for neuron fragments and raw `.tif` (TIFF) files for volumetric microscopy intensity data. The inference engine also accepts a `(x, y, z)` physical resolution mapping (microns per voxel) via the `--resolution` argument.
+- **Scale Normalization:** Because test data might be captured at an arbitrary micron scale compared to CCFv3, the inference preprocessor automatically applies any provided physical resolution scaling (`x * res_x, y * res_y, z * res_z`). It then normalizes the spatial bounding box of the SWC. This prevents continuous metrics (like inertia or curvature energy) from exploding outside the bounds of the VQ codebooks.
 - **Rotation Invariance:** No spatial alignment/registration is required before tokenization. Because the geometric tokenization pipeline relies exclusively on relative intrinsic features (branching angles, tortuosity, scalar curvature), the model is inherently translation and rotation invariant.
 
 ## Usage
@@ -40,9 +40,9 @@ python scripts/train.py --resume_from checkpoints/checkpoint_epoch_50.pt
 The script will load the saved model state, retain the learned embeddings, and continue iterating over your new dataloader.
 
 ### 3. Running Gap Bridging Inference
-The inference script operates on raw biological SWC tracings and TIFF imaging files.
+The inference script operates on raw biological SWC tracings and TIFF imaging files. You should supply the physical resolution to ensure precise mapping.
 ```bash
 cd Neuro_Training
-python scripts/inference.py
+python scripts/inference.py --source_swc "data/raw/frag_001.swc" --tiff_volume "data/raw/brain.tif" --resolution 1.0 1.0 3.0
 ```
 *Note: Ensure you update the mock file paths at the bottom of `inference.py` to point to your actual source SWC, candidate SWCs directory, and TIFF volume file before executing.*

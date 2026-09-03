@@ -20,6 +20,6 @@ To process a folder of raw SWCs and incrementally update the latest model checkp
 
 ```bash
 cd Neuro_Retraining
-python scripts/run_incremental.py
+python scripts/run_incremental.py --resolution 1.0 1.0 3.0
 ```
-*Note: Make sure `config.json` has `io_paths.raw_swc_input_dir` pointing to your new data folder.*
+*Note: Make sure `config.json` has `io_paths.raw_swc_input_dir` pointing to your new data folder. The `--resolution` flag maps raw voxels to proper CCFv3 physical space before processing.*

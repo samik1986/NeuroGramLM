@@ -15,8 +15,8 @@
 Because the dataset is massive, the model must bridge disconnected neurons efficiently. **Inference operates on raw biology files rather than pre-tokenized dicts.**
 
 ### Pre-Processing (Raw Data Ingestion)
-1. **Scale Normalization:** Raw SWC files are ingested alongside an optional `(x, y, z)` physical resolution. The preprocessor multiplies the SWC points by this resolution. To prevent metrics from exploding out of VQ codebook bounds, the SWC is then bounded so its diagonal matches the CCFv3 training baseline (e.g., ~500 microns).
-2. **Tokenization:** Geometric features (tortuosity, curvature energy) are computed. Because these metrics measure relative bending, the data is completely translation and **rotation invariant**.
+1. **Scale Normalization:** Raw SWC files are ingested alongside an `(x, y, z)` physical resolution mapping provided via the CLI `--resolution` flag. The preprocessor first multiplies the SWC points by this resolution to match proper CCFv3 scale dimensions. To prevent continuous geometric metrics from exploding out of VQ codebook bounds, the SWC is then bounded so its diagonal matches the CCFv3 training baseline (e.g., ~500 microns).
+2. **Tokenization:** Geometric features (tortuosity, curvature energy) are computed. Because these metrics measure relative bending rather than absolute coordinate space, the data is completely translation and **rotation invariant**.
 3. **Encoding:** The fragment is mapped to the token vocabulary.
 
 ### Stage 1: Decoder Prediction & Fast Search

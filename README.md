@@ -45,11 +45,11 @@ python neurogram.py --step train
 
 ### 3. Run Inference (Gap Bridging)
 ```bash
-python neurogram.py --step infer --source_swc data/raw/frag_001.swc --tiff_volume data/raw/brain.tif
+python neurogram.py --step infer --source_swc data/raw/frag_001.swc --tiff_volume data/raw/brain.tif --resolution 1.0 1.0 3.0
 ```
 
 ### 4. Incremental Retraining (New Data)
 Validate new, arbitrary-scaled SWCs against the CCFv3 latent space and resume training on them:
 ```bash
-python neurogram.py --step retrain --checkpoint checkpoints/latest.pt
+python neurogram.py --step retrain --checkpoint checkpoints/latest.pt --resolution 1.0 1.0 3.0
 ```
