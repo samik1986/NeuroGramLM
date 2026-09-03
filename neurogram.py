@@ -49,7 +49,8 @@ def run_subprocess(command_list, cwd=None):
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Unified Pipeline Orchestrator")
-    parser.add_argument('--step', type=str, required=True, choices=['tokenize', 'train', 'infer', 'retrain'], 
+    parser.add_argument('--step', type=str, required=True, 
+                        choices=['tokenize', 'train', 'infer', 'retrain', 'finetune'],
                         help="The pipeline step to execute.")
                         
     # Global Overrides
@@ -97,6 +98,21 @@ def main():
         logger.info("Routing to Incremental Retraining Pipeline...")
         script_path = os.path.join(base_dir, 'Neuro_Retraining', 'scripts', 'run_incremental.py')
         cmd = [sys.executable, script_path]
+        if args.resolution:
+            cmd.extend(['--resolution', str(args.resolution[0]), str(args.resolution[1]), str(args.resolution[2])])
+            
+        run_subprocess(cmd)
+        
+    elif args.step == 'finetune':
+        logger.info("Routing to Domain Finetuning Pipeline...")
+        script_path = os.path.join(base_dir, 'Neuro_Finetuning', 'scripts', 'run_finetuning.py')
+        cmd = [sys.executable, script_path]
+        if args.checkpoint:
+            cmd.extend(['--checkpoint', args.checkpoint])
+        else:
+            logger.error("Finetuning requires a --checkpoint to finetune from.")
+            sys.exit(1)
+            
         if args.resolution:
             cmd.extend(['--resolution', str(args.resolution[0]), str(args.resolution[1]), str(args.resolution[2])])
             
