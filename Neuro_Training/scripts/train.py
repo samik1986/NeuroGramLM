@@ -28,7 +28,7 @@ def load_config(config_path):
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def train_epoch(model, dataloader, optimizer, scaler, device, save_steps=None, save_dir=None, epoch=None):
+def train_epoch(model, dataloader, optimizer, scaler, device, save_steps=None, save_dir=None, epoch=None, writer=None):
     model.train()
     total_loss = 0.0
     
@@ -98,6 +98,15 @@ def train_epoch(model, dataloader, optimizer, scaler, device, save_steps=None, s
         total_loss += loss.item()
         pbar.set_postfix({'loss': loss.item()})
         
+        # Step-level TensorBoard logging
+        if writer is not None:
+            global_step = (epoch - 1) * len(dataloader) + step
+            writer.add_scalar('Loss/train_step', loss.item(), global_step)
+            if isinstance(outputs, dict):
+                for k in ['geom_loss', 'topo_loss', 'fusion_loss', 'dec_loss']:
+                    if k in outputs and outputs[k] is not None:
+                        writer.add_scalar(f'SubLoss/{k}', outputs[k].mean().item(), global_step)
+        
         # Save intermediate checkpoint
         if save_steps and save_dir and (step + 1) % save_steps == 0:
             ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}_step_{step + 1}.pt")
@@ -163,6 +172,7 @@ def validate_epoch(model, dataloader, device):
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Training Script")
     parser.add_argument('--resume_from', type=str, default=None, help="Path to checkpoint (.pt) for incremental training")
+    parser.add_argument('--epochs', type=int, default=None, help="Override number of training epochs")
     args = parser.parse_args()
 
     # Setup
@@ -171,6 +181,9 @@ def main():
     
     train_config = load_config(config_path)
     model_config = load_config(model_config_path)
+    
+    if args.epochs is not None:
+        train_config['training_parameters']['epochs'] = args.epochs
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Starting Training Process. Using device: {device}")
@@ -247,9 +260,9 @@ def main():
         )
         
         if len(train_dataloader) > 0:
-            avg_loss = train_epoch(model, train_dataloader, optimizer, scaler, device, save_steps=save_steps, save_dir=save_dir, epoch=epoch)
+            avg_loss = train_epoch(model, train_dataloader, optimizer, scaler, device, save_steps=save_steps, save_dir=save_dir, epoch=epoch, writer=writer)
             logger.info(f"Epoch {epoch}/{epochs} | Train Loss: {avg_loss:.4f}")
-            writer.add_scalar('Loss/train', avg_loss, epoch)
+            writer.add_scalar('Loss/train_epoch', avg_loss, epoch)
         else:
             logger.warning(f"Epoch {epoch}/{epochs} skipped (Empty Dataloader)")
             

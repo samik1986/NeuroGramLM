@@ -77,6 +77,8 @@ def main():
         logger.info("Routing to Training Pipeline...")
         script_path = os.path.join(base_dir, 'Neuro_Training', 'scripts', 'train.py')
         cmd = [sys.executable, script_path]
+        if args.epochs:
+            cmd.extend(["--epochs", str(args.epochs)])
         if args.checkpoint:
             cmd.extend(["--resume_from", args.checkpoint])
         run_subprocess(cmd)
