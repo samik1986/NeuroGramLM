@@ -11,7 +11,7 @@ This module contains the logic for training the `Neuro_Model` Encoder-Decoder Tr
 
 ## Overview
 1. **Training:** 
-   The model is trained on continuous neuron fragments using autoregressive teacher-forcing. Modality Dropout is applied so the model learns to bridge gaps relying purely on the Geometric and Topological encoders.
+   The model is trained on continuous neuron fragments using autoregressive teacher-forcing. Modality Dropout is applied so the model learns to bridge gaps relying purely on the Geometric and Topological encoders. Automatic Mixed Precision (AMP `autocast` and `GradScaler`) and cuDNN benchmark optimizations are used for maximal single-GPU and multi-GPU throughput.
 2. **Inference (Bridging):**
    When a gap is encountered, `inference.py` predicts the missing latent node, searches the database for candidate fragments using KNN, and then validates the top candidates by passing their real 3D intensity ridges through the Zero-Shot Bio Tower.
 
@@ -26,23 +26,20 @@ Unlike training, which uses pre-computed tokens from a CCFv3 dataset, the **infe
 ### 1. Training from Scratch
 To start a new training run using the parameters defined in `config.json`:
 ```bash
-cd Neuro_Training
-python scripts/train.py
+python Neuro_Training/scripts/train.py
 ```
-This will automatically save checkpoints inside the `checkpoints/` directory.
+This will automatically save checkpoints inside the `checkpoints/` directory and log scalars to TensorBoard under `analysis/logs`.
 
 ### 2. Incremental / Continual Training
 If you acquire a new batch of CCFv3 tokenized data and want to continue training from an existing model (fine-tuning or incremental learning), use the `--resume_from` flag:
 ```bash
-cd Neuro_Training
-python scripts/train.py --resume_from checkpoints/checkpoint_epoch_50.pt
+python Neuro_Training/scripts/train.py --resume_from checkpoints/checkpoint_epoch_1.pt
 ```
 The script will load the saved model state, retain the learned embeddings, and continue iterating over your new dataloader.
 
 ### 3. Running Gap Bridging Inference
 The inference script operates on raw biological SWC tracings and TIFF imaging files. You should supply the physical resolution to ensure precise mapping.
 ```bash
-cd Neuro_Training
-python scripts/inference.py --source_swc "data/raw/frag_001.swc" --tiff_volume "data/raw/brain.tif" --resolution 1.0 1.0 3.0
+python Neuro_Training/scripts/inference.py --source_swc "data/raw/frag_001.swc" --tiff_volume "data/raw/brain.tif" --resolution 1.0 1.0 3.0
 ```
 *Note: Ensure you update the mock file paths at the bottom of `inference.py` to point to your actual source SWC, candidate SWCs directory, and TIFF volume file before executing.*

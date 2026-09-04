@@ -34,8 +34,21 @@ class NeuroDataset(Dataset):
         
     def __getitem__(self, idx):
         file_path = self.samples[idx]
-        with open(file_path, 'r') as f:
-            data = json.load(f)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    data = {}
+                else:
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        # Attempt to extract first valid JSON object if extra data exists
+                        decoder = json.JSONDecoder()
+                        data, _ = decoder.raw_decode(content)
+        except Exception:
+            # Fallback to empty data structure on corrupted / unparseable file
+            data = {}
             
         tokens = data.get('tokens', [])
         

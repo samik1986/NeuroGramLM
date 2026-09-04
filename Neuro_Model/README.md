@@ -8,12 +8,15 @@ Unlike standard NLP models, neurons exist in 3D space and branch hierarchically.
 - **Multi-Tower Encoders:** Separate Transformer towers for Geometric features (tortuosity, inertia, curvature) and Topological features (Strahler order, WL Hash).
 - **RoPE (Rotary Position Embeddings):** Allows for continuous, extrapolation-friendly positional encoding across varying branch lengths.
 - **Multimodal Fusion:** A late-fusion block that brings the separate encodings into a joint latent space.
+- **Multi-Tower Decoders:** Autoregressive generation heads predicting discrete next-token IDs for geometry and topology.
+- **Flattened Input Tensor Signature:** Model accepts flattened keyword tensors (`vq_tortuosity`, `topo_strahler`, `target_vq_tortuosity_shifted`, etc.) to prevent DataParallel / DistributedDataParallel dictionary scatter issues.
+- **Memory-Safe Embedding Guard:** Safeguards against `-100` ignore indices in target shifts by remapping padding positions to zero during target embedding lookup.
 - **Modular Sub-Tower Losses:** Auxiliary losses applied before fusion to ensure each tower learns its specific modality robustly.
 
 ## Structure
 - `config.json`: Hyperparameters and IO paths.
-- `layers/`: Core PyTorch modules (`embeddings.py`, `towers.py`, `fusion.py`).
-- `losses/`: Modular loss functions designed to be easily extensible.
+- `layers/`: Core PyTorch modules (`embeddings.py`, `towers.py`, `fusion.py`, `decoders.py`).
+- `losses/`: Modular loss functions designed to be easily extensible (`geometric_loss.py`, `topological_loss.py`, `fusion_loss.py`, `decoder_loss.py`).
 - `model.py`: The main `NeuroGramLM` orchestrator class.
 - `ALGORITHM.md`: Deep dive into the architectural flow and math.
 - `HOW_TO_UPDATE.md`: Instructions for modifying and extending the model.
@@ -21,6 +24,5 @@ Unlike standard NLP models, neurons exist in 3D space and branch hierarchically.
 ## Running the Model Tests Directly
 To run a forward-pass structural test of the PyTorch modules directly:
 ```bash
-cd Neuro_Model
-python model.py
+python Neuro_Model/model.py
 ```

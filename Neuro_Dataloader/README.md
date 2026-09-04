@@ -7,6 +7,7 @@ This directory contains the data loading pipeline for the NeuroGramLM architectu
 ### `NeuroDataset(Dataset)`
 - **File**: `dataset.py`
 - **Description**: Parses `.json` token streams from the tokenization output. Given a list of files, it iteratively opens them and converts the geometric `vq_ids` and topological `embeddings` into PyTorch tensors. It returns a dictionary containing `inputs` and `targets` correctly shifted by one time step for causal modeling.
+- **Robust JSON Ingestion**: Includes fallback mechanisms using raw decoders and safe fallbacks to handle malformed, trailing, or corrupted JSON files gracefully without terminating DataLoader worker processes.
 - **Sequence Chunking**: To prevent CUDA Out-of-Memory (OOM) errors from extremely long fragments, the dataset randomly crops token sequences to a maximum length (`max_seq_len`).
 - **Imputation**: Any null values found in the input embeddings (e.g. `background_intensity`) are gracefully defaulted to a safe value.
 
@@ -14,6 +15,7 @@ This directory contains the data loading pipeline for the NeuroGramLM architectu
 - **File**: `collate.py`
 - **Description**: Batches multiple sequences of varying lengths. It applies zero-padding up to the longest sequence in the batch.
 - **Mask Generation**: Autogenerates the boolean `padding_mask` for the Encoder blocks and the triangular causal `tgt_mask` for the Decoder blocks.
+- **Target Shift Padding**: Pads targets with `-100` (`padding_idx_targets`) to integrate directly with PyTorch `CrossEntropyLoss(ignore_index=-100)`.
 
 ## Assumptions
 - The raw JSON files strictly follow the token structure: `tokens -> vq_ids` & `tokens -> embeddings`.
@@ -29,7 +31,7 @@ All dataset and collator logic is driven by the local `config.json` inside this 
   - `wl_vocab_size` (int): The vocabulary cap to modulo the topological Weisfeiler-Lehman hash against. (Default: 1000)
 - **`collate_parameters`**:
   - `padding_idx_inputs` (int): The value used to pad sequences for the encoder input. This is ignored by the transformer's `padding_mask`. (Default: 0)
-  - `padding_idx_targets` (int): The value used to pad target sequences. Must align with the `ignore_index` of your PyTorch `CrossEntropyLoss`. (Default: -1)
+  - `padding_idx_targets` (int): The value used to pad target sequences. Aligns with PyTorch `CrossEntropyLoss` ignore index. (Default: -100)
 
 ## How to Update
 

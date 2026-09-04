@@ -222,12 +222,9 @@ def main():
         # Randomize validation set each epoch
         random.shuffle(all_files)
         
-        # Limit files for a very fast 1-epoch test
-        current_files = all_files[:100]
-        
-        split_idx = int(len(current_files) * 0.8)
-        train_files = current_files[:split_idx]
-        val_files = current_files[split_idx:]
+        split_idx = int(len(all_files) * 0.8)
+        train_files = all_files[:split_idx]
+        val_files = all_files[split_idx:]
         
         train_dataset = NeuroDataset(token_dir, file_list=train_files)
         val_dataset = NeuroDataset(token_dir, file_list=val_files)
