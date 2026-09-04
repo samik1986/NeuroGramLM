@@ -10,10 +10,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import sys
 import argparse
+import glob
+import random
+from torch.amp import autocast, GradScaler
+from torch.utils.tensorboard import SummaryWriter
 
 # Append the parent directory to sys.path so we can import Neuro_Model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from Neuro_Model.model import NeuroGramLM
+from Neuro_Dataloader.dataset import NeuroDataset
+from Neuro_Dataloader.collate import neuro_collate_fn
 from utils.logger import get_logger
 
 logger = get_logger("Trainer", module_name="Training")
@@ -22,7 +28,7 @@ def load_config(config_path):
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def train_epoch(model, dataloader, optimizer, device, save_steps=None, save_dir=None, epoch=None):
+def train_epoch(model, dataloader, optimizer, scaler, device, save_steps=None, save_dir=None, epoch=None):
     model.train()
     total_loss = 0.0
     
@@ -30,12 +36,7 @@ def train_epoch(model, dataloader, optimizer, device, save_steps=None, save_dir=
     pbar = tqdm(dataloader, desc="Training")
     
     for step, batch in enumerate(pbar):
-        # Move batch and targets to device
-        batch = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
-                 for k, v in batch['inputs'].items()}
-        targets = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
-                   for k, v in batch['targets'].items()}
-                   
+        # Extract masks before modifying inputs
         padding_mask = batch.get('padding_mask', None)
         if padding_mask is not None:
             padding_mask = padding_mask.to(device)
@@ -43,20 +44,57 @@ def train_epoch(model, dataloader, optimizer, device, save_steps=None, save_dir=
         tgt_mask = batch.get('tgt_mask', None)
         if tgt_mask is not None:
             tgt_mask = tgt_mask.to(device)
+
+        # Move inputs and targets to device
+        inputs = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
+                 for k, v in batch['inputs'].items()}
+        targets = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
+                   for k, v in batch['targets'].items()}
+                   
+        optimizer.zero_grad(set_to_none=True)
+        
+        # Forward pass with Automatic Mixed Precision (AMP)
+        device_type = 'cuda' if device.type == 'cuda' else 'cpu'
+        with autocast(device_type=device_type, enabled=device_type == 'cuda'):
+            # Pass flat kwargs to avoid DataParallel nested dictionary scatter corruption
+            flat_kwargs = {
+                'vq_tortuosity': inputs['vq_ids']['tortuosity'],
+                'vq_curvature': inputs['vq_ids']['curvature_energy'],
+                'vq_inertia': inputs['vq_ids']['inertia_tensor'],
+                'topo_strahler': inputs['topological_ids']['strahler_order'],
+                'topo_wl': inputs['topological_ids']['wl_hash'],
+                'bio_volumes': inputs.get('bio_volumes', None),
+                'target_vq_tortuosity': targets['vq_ids']['tortuosity'],
+                'target_vq_curvature': targets['vq_ids']['curvature_energy'],
+                'target_vq_inertia': targets['vq_ids']['inertia_tensor'],
+                'target_topo_strahler': targets['topological_ids']['strahler_order'],
+                'target_topo_wl': targets['topological_ids']['wl_hash'],
+                'target_vq_tortuosity_shifted': targets['vq_ids_shifted']['tortuosity'],
+                'target_vq_curvature_shifted': targets['vq_ids_shifted']['curvature_energy'],
+                'target_vq_inertia_shifted': targets['vq_ids_shifted']['inertia_tensor'],
+                'target_topo_strahler_shifted': targets['topological_ids_shifted']['strahler_order'],
+                'target_topo_wl_shifted': targets['topological_ids_shifted']['wl_hash'],
+                'padding_mask': padding_mask
+            }
+            outputs = model(**flat_kwargs)
             
-        optimizer.zero_grad()
-        
-        # Forward pass (Bio is bypassed internally during training)
-        outputs = model(batch, targets=targets, padding_mask=padding_mask, tgt_mask=tgt_mask)
-        
-        loss = outputs['loss']
-        loss.backward()
-        
-        # Gradient Clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        
-        optimizer.step()
-        
+            # Since outputs might be scattered across GPUs and returned as a list/dict, 
+            # we need to make sure we handle the loss correctly
+            if isinstance(outputs, dict):
+                loss = outputs['loss'].mean()
+            else:
+                loss = outputs.mean()
+            
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+        else:
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
         total_loss += loss.item()
         pbar.set_postfix({'loss': loss.item()})
         
@@ -65,6 +103,60 @@ def train_epoch(model, dataloader, optimizer, device, save_steps=None, save_dir=
             ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}_step_{step + 1}.pt")
             torch.save(model.state_dict(), ckpt_path)
             logger.info(f"Saved intermediate checkpoint to {ckpt_path}")
+            
+    return total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+
+def validate_epoch(model, dataloader, device):
+    model.eval()
+    total_loss = 0.0
+    
+    pbar = tqdm(dataloader, desc="Validating")
+    with torch.no_grad():
+        for step, batch in enumerate(pbar):
+            padding_mask = batch.get('padding_mask', None)
+            if padding_mask is not None:
+                padding_mask = padding_mask.to(device)
+                
+            tgt_mask = batch.get('tgt_mask', None)
+            if tgt_mask is not None:
+                tgt_mask = tgt_mask.to(device)
+
+            inputs = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
+                     for k, v in batch['inputs'].items()}
+            targets = {k: {sk: sv.to(device) for sk, sv in v.items()} if isinstance(v, dict) else v.to(device) 
+                       for k, v in batch['targets'].items()}
+                       
+            device_type = 'cuda' if device.type == 'cuda' else 'cpu'
+            with autocast(device_type=device_type, enabled=device_type == 'cuda'):
+                flat_kwargs = {
+                    'vq_tortuosity': inputs['vq_ids']['tortuosity'],
+                    'vq_curvature': inputs['vq_ids']['curvature_energy'],
+                    'vq_inertia': inputs['vq_ids']['inertia_tensor'],
+                    'topo_strahler': inputs['topological_ids']['strahler_order'],
+                    'topo_wl': inputs['topological_ids']['wl_hash'],
+                    'bio_volumes': inputs.get('bio_volumes', None),
+                    'target_vq_tortuosity': targets['vq_ids']['tortuosity'],
+                    'target_vq_curvature': targets['vq_ids']['curvature_energy'],
+                    'target_vq_inertia': targets['vq_ids']['inertia_tensor'],
+                    'target_topo_strahler': targets['topological_ids']['strahler_order'],
+                    'target_topo_wl': targets['topological_ids']['wl_hash'],
+                    'target_vq_tortuosity_shifted': targets['vq_ids_shifted']['tortuosity'],
+                    'target_vq_curvature_shifted': targets['vq_ids_shifted']['curvature_energy'],
+                    'target_vq_inertia_shifted': targets['vq_ids_shifted']['inertia_tensor'],
+                    'target_topo_strahler_shifted': targets['topological_ids_shifted']['strahler_order'],
+                    'target_topo_wl_shifted': targets['topological_ids_shifted']['wl_hash'],
+                    'padding_mask': padding_mask,
+                    'tgt_mask': tgt_mask
+                }
+                outputs = model(**flat_kwargs)
+                
+                if isinstance(outputs, dict):
+                    loss = outputs['loss'].mean()
+                else:
+                    loss = outputs.mean()
+            
+            total_loss += loss.item()
+            pbar.set_postfix({'loss': loss.item()})
             
     return total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
 
@@ -83,6 +175,10 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Starting Training Process. Using device: {device}")
     
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True
+        logger.info("Enabled cuDNN benchmark for optimal performance.")
+    
     # Initialize Model
     model = NeuroGramLM(model_config)
     
@@ -94,37 +190,86 @@ def main():
             logger.warning(f"Checkpoint {args.resume_from} not found. Starting from scratch.")
             
     model = model.to(device)
+    # For now, forcing single GPU as per user request to avoid DataParallel Hopper bugs
+    if False and torch.cuda.device_count() > 1:
+        logger.info(f"Using {torch.cuda.device_count()} GPUs for DataParallel!")
+        model = torch.nn.DataParallel(model)
     
-    # Optimizer
+    # Optimizer and Scaler
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=train_config['training_parameters']['learning_rate'],
         weight_decay=train_config['training_parameters']['weight_decay']
     )
+    scaler = GradScaler('cuda') if device.type == 'cuda' else None
     
-    # Dataloader (Mocked for architecture scaffolding)
-    # dataloader = DataLoader(NeuroDataset(train_config['io_paths']['token_input_dir']), ...)
-    logger.warning("Dataloader is a placeholder. Implement NeuroDataset.")
-    dataloader = [] 
+    # Setup Dataloader
+    token_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../', train_config['io_paths']['token_input_dir']))
+    all_files = glob.glob(os.path.join(token_dir, "*.json"))
     
-    # Training Loop
+    # Training Loop config
     epochs = train_config['training_parameters']['epochs']
     save_dir = train_config['io_paths']['model_checkpoint_dir']
     save_steps = train_config['training_parameters'].get('save_steps', 1000)
     os.makedirs(save_dir, exist_ok=True)
     
+    # TensorBoard setup
+    log_dir = train_config['io_paths'].get('log_dir', os.path.join(save_dir, '../logs/tensorboard'))
+    writer = SummaryWriter(log_dir=log_dir)
+    logger.info(f"TensorBoard logging to: {log_dir}")
+    
     for epoch in range(1, epochs + 1):
-        if len(dataloader) > 0:
-            avg_loss = train_epoch(model, dataloader, optimizer, device, save_steps=save_steps, save_dir=save_dir, epoch=epoch)
-            logger.info(f"Epoch {epoch}/{epochs} | Avg Loss: {avg_loss:.4f}")
+        # Randomize validation set each epoch
+        random.shuffle(all_files)
+        
+        # Limit files for a very fast 1-epoch test
+        current_files = all_files[:100]
+        
+        split_idx = int(len(current_files) * 0.8)
+        train_files = current_files[:split_idx]
+        val_files = current_files[split_idx:]
+        
+        train_dataset = NeuroDataset(token_dir, file_list=train_files)
+        val_dataset = NeuroDataset(token_dir, file_list=val_files)
+        
+        train_dataloader = DataLoader(
+            train_dataset, 
+            batch_size=train_config['training_parameters']['batch_size'], 
+            shuffle=True, 
+            collate_fn=neuro_collate_fn,
+            num_workers=8,
+            pin_memory=True
+        )
+        val_dataloader = DataLoader(
+            val_dataset, 
+            batch_size=train_config['training_parameters']['batch_size'], 
+            shuffle=False, 
+            collate_fn=neuro_collate_fn,
+            num_workers=8,
+            pin_memory=True
+        )
+        
+        if len(train_dataloader) > 0:
+            avg_loss = train_epoch(model, train_dataloader, optimizer, scaler, device, save_steps=save_steps, save_dir=save_dir, epoch=epoch)
+            logger.info(f"Epoch {epoch}/{epochs} | Train Loss: {avg_loss:.4f}")
+            writer.add_scalar('Loss/train', avg_loss, epoch)
         else:
             logger.warning(f"Epoch {epoch}/{epochs} skipped (Empty Dataloader)")
             
+        if epoch % 1 == 0:
+            if len(val_dataloader) > 0:
+                val_loss = validate_epoch(model, val_dataloader, device)
+                logger.info(f"Epoch {epoch}/{epochs} | Validation Loss: {val_loss:.4f}")
+                writer.add_scalar('Loss/validation', val_loss, epoch)
+            else:
+                logger.warning(f"Epoch {epoch}/{epochs} Validation skipped (Empty Dataloader)")
+                
         if epoch % train_config['training_parameters']['save_every'] == 0:
             ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}.pt")
             torch.save(model.state_dict(), ckpt_path)
             logger.info(f"Saved checkpoint to {ckpt_path}")
             
+    writer.close()
     logger.info("Training Complete.")
 
 if __name__ == "__main__":

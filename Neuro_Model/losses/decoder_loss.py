@@ -12,7 +12,7 @@ class DecoderLoss(nn.Module):
     """
     def __init__(self, vocab_sizes):
         super().__init__()
-        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
         self.vocab_sizes = vocab_sizes
 
     def forward(self, logits_dict, targets_dict):

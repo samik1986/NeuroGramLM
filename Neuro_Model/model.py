@@ -59,44 +59,69 @@ class NeuroGramLM(nn.Module):
         self.fusion_loss_fn = FusionLoss()
         self.decoder_loss_fn = DecoderLoss(vocab_sizes)
 
-    def forward(self, batch, targets=None, padding_mask=None, tgt_mask=None):
+    def forward(self, 
+                vq_tortuosity, vq_curvature, vq_inertia, 
+                topo_strahler, topo_wl,
+                bio_volumes=None, 
+                target_vq_tortuosity=None, target_vq_curvature=None, target_vq_inertia=None,
+                target_topo_strahler=None, target_topo_wl=None,
+                target_vq_tortuosity_shifted=None, target_vq_curvature_shifted=None, target_vq_inertia_shifted=None,
+                target_topo_strahler_shifted=None, target_topo_wl_shifted=None,
+                padding_mask=None, tgt_mask=None):
         """
-        batch: Dict containing 'vq_ids', 'topological_ids', and optionally 'bio_volumes'
-        targets: Target dict for teacher-forced autoregressive decoding
+        COMPLETELY flattened inputs to avoid DataParallel nested dictionary scatter corruption.
         """
         # ================= ENCODER =================
-        geom_x = self.geom_emb(batch['vq_ids'])
-        topo_x = self.topo_emb(batch['topological_ids']['strahler_order'], 
-                               batch['topological_ids']['wl_hash'])
+        vq_ids = {
+            'tortuosity': vq_tortuosity,
+            'curvature_energy': vq_curvature,
+            'inertia_tensor': vq_inertia
+        }
+        geom_x = self.geom_emb(vq_ids)
+        topo_x = self.topo_emb(topo_strahler, topo_wl)
         
         geom_enc = self.geom_tower(geom_x, mask=padding_mask)
         topo_enc = self.topo_tower(topo_x, mask=padding_mask)
         
-        # Zero-shot Bio Encoding (If provided at test time, otherwise zeroed/dropout)
-        if 'bio_volumes' in batch and batch['bio_volumes'] is not None:
-            bio_x = self.bio_emb(batch['bio_volumes'])
+        # Zero-shot Bio Encoding
+        if bio_volumes is not None:
+            bio_x = self.bio_emb(bio_volumes)
             bio_enc = self.bio_tower(bio_x, mask=padding_mask)
         else:
-            # During training, Bio is effectively null
             bio_enc = torch.zeros_like(geom_enc)
             
-        # Fusion Memory (Geometry + Topology)
+        # Fusion Memory
         encoder_memory = self.fusion_block(geom_enc, topo_enc, mask=padding_mask)
-        
-        # In a real forward pass, we might concatenate bio_enc to encoder_memory at test time, 
-        # or use dual cross-attention in the decoder. For simplicity here, we add it to the memory
-        # since it's zeroed during training and won't affect gradients.
         final_memory = encoder_memory + bio_enc 
         
         # ================= DECODER =================
-        # If we have shifted targets for teacher forcing
-        if targets is not None:
-            tgt_geom_x = self.geom_emb(targets['vq_ids_shifted'])
-            tgt_topo_x = self.topo_emb(targets['topological_ids_shifted']['strahler_order'],
-                                       targets['topological_ids_shifted']['wl_hash'])
+        if target_vq_tortuosity_shifted is not None and target_topo_strahler_shifted is not None:
+            targets_vq_shifted = {
+                'tortuosity': target_vq_tortuosity_shifted,
+                'curvature_energy': target_vq_curvature_shifted,
+                'inertia_tensor': target_vq_inertia_shifted
+            }
+            targets_topo_shifted = {
+                'strahler_order': target_topo_strahler_shifted,
+                'wl_hash': target_topo_wl_shifted
+            }
+            
+            # Replace -100 padding index with 0 for embedding lookups to prevent out of bounds memory access
+            safe_targets_vq = {k: torch.where(v == -100, torch.zeros_like(v), v) for k, v in targets_vq_shifted.items()}
+            safe_targets_topo = {k: torch.where(v == -100, torch.zeros_like(v), v) for k, v in targets_topo_shifted.items()}
+            
+            tgt_geom_x = self.geom_emb(safe_targets_vq)
+            tgt_topo_x = self.topo_emb(safe_targets_topo['strahler_order'],
+                                       safe_targets_topo['wl_hash'])
+            
+            # Generate causal mask internally
+            seq_len = tgt_geom_x.size(1)
+            internal_tgt_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool, device=tgt_geom_x.device), diagonal=1)
+            if tgt_mask is not None:
+                internal_tgt_mask = internal_tgt_mask | tgt_mask
                                        
-            dec_geom_out = self.geom_decoder(tgt_geom_x, final_memory, tgt_mask=tgt_mask)
-            dec_topo_out = self.topo_decoder(tgt_topo_x, final_memory, tgt_mask=tgt_mask)
+            dec_geom_out = self.geom_decoder(tgt_geom_x, final_memory, tgt_mask=internal_tgt_mask)
+            dec_topo_out = self.topo_decoder(tgt_topo_x, final_memory, tgt_mask=internal_tgt_mask)
             
             # Predict Next Tokens
             geom_logits = {
@@ -109,17 +134,30 @@ class NeuroGramLM(nn.Module):
                 'wl_hash': self.topo_head_wl(dec_topo_out)
             }
             
+            # Reconstruct targets for loss
+            targets_vq = {
+                'tortuosity': target_vq_tortuosity,
+                'curvature_energy': target_vq_curvature,
+                'inertia_tensor': target_vq_inertia
+            }
+            targets_topo = {
+                'strahler_order': target_topo_strahler,
+                'wl_hash': target_topo_wl
+            }
+            
             # Calculate Decoder Losses
-            l_dec_geom = self.decoder_loss_fn(geom_logits, targets['vq_ids'])
-            l_dec_topo = self.decoder_loss_fn(topo_logits, targets['topological_ids'])
+            l_dec_geom = self.decoder_loss_fn(geom_logits, targets_vq)
+            l_dec_topo = self.decoder_loss_fn(topo_logits, targets_topo)
             
             total_loss = l_dec_geom + l_dec_topo
             
+            if self.training:
+                return total_loss
+                
             return {
                 'loss': total_loss,
                 'geom_logits': geom_logits,
                 'topo_logits': topo_logits
             }
         else:
-            # Inference mode (would implement iterative generation loop here)
             return {'encoder_memory': final_memory}
