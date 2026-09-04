@@ -14,6 +14,7 @@ import glob
 import random
 from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
+from .visualize import vq_to_synthetic_3d_coords, render_validation_picture, render_validation_gif
 
 # Append the parent directory to sys.path so we can import Neuro_Model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -115,10 +116,11 @@ def train_epoch(model, dataloader, optimizer, scaler, device, save_steps=None, s
             
     return total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
 
-def validate_epoch(model, dataloader, device):
+def validate_epoch(model, dataloader, device, epoch=1, vis_dir=None):
     model.eval()
     total_loss = 0.0
     
+    saved_visualizations = False
     pbar = tqdm(dataloader, desc="Validating")
     with torch.no_grad():
         for step, batch in enumerate(pbar):
@@ -166,6 +168,63 @@ def validate_epoch(model, dataloader, device):
             
             total_loss += loss.item()
             pbar.set_postfix({'loss': loss.item()})
+            
+            # Save visual outputs for the first validation batch of the epoch
+            if vis_dir and not saved_visualizations and isinstance(outputs, dict) and 'geom_logits' in outputs:
+                try:
+                    epoch_vis_dir = os.path.join(vis_dir, f"epoch_{epoch:03d}")
+                    os.makedirs(epoch_vis_dir, exist_ok=True)
+                    
+                    # Take up to 3 samples from the batch
+                    batch_size_val = inputs['vq_ids']['tortuosity'].shape[0]
+                    num_samples = min(3, batch_size_val)
+                    
+                    pred_tort = torch.argmax(outputs['geom_logits']['tortuosity'], dim=-1).cpu().numpy()
+                    pred_curv = torch.argmax(outputs['geom_logits']['curvature_energy'], dim=-1).cpu().numpy()
+                    pred_iner = torch.argmax(outputs['geom_logits']['inertia_tensor'], dim=-1).cpu().numpy()
+                    
+                    in_tort = targets['vq_ids_shifted']['tortuosity'].cpu().numpy()
+                    in_curv = targets['vq_ids_shifted']['curvature_energy'].cpu().numpy()
+                    in_iner = targets['vq_ids_shifted']['inertia_tensor'].cpu().numpy()
+                    
+                    pad_np = padding_mask.cpu().numpy() if padding_mask is not None else None
+                    
+                    for s_idx in range(num_samples):
+                        # Filter out padding tokens
+                        if pad_np is not None:
+                            valid_len = np.sum(~pad_np[s_idx])
+                            s_in_tort = in_tort[s_idx, :valid_len]
+                            s_in_curv = in_curv[s_idx, :valid_len]
+                            s_in_iner = in_iner[s_idx, :valid_len]
+                            
+                            s_out_tort = pred_tort[s_idx, :valid_len]
+                            s_out_curv = pred_curv[s_idx, :valid_len]
+                            s_out_iner = pred_iner[s_idx, :valid_len]
+                        else:
+                            s_in_tort = in_tort[s_idx]
+                            s_in_curv = in_curv[s_idx]
+                            s_in_iner = in_iner[s_idx]
+                            
+                            s_out_tort = pred_tort[s_idx]
+                            s_out_curv = pred_curv[s_idx]
+                            s_out_iner = pred_iner[s_idx]
+                            
+                        # Generate continuous 3D coordinate trajectories
+                        in_coords = vq_to_synthetic_3d_coords(s_in_tort, s_in_curv, s_in_iner)
+                        out_coords = vq_to_synthetic_3d_coords(s_out_tort, s_out_curv, s_out_iner)
+                        
+                        # 1. Save static comparison image (low-res)
+                        pic_path = os.path.join(epoch_vis_dir, f"val_sample_{s_idx + 1}_comparison.png")
+                        render_validation_picture(in_coords, out_coords, pic_path, epoch=epoch, sample_idx=s_idx + 1)
+                        
+                        # 2. Save step-by-step animated GIF (low-res)
+                        gif_path = os.path.join(epoch_vis_dir, f"val_sample_{s_idx + 1}_growth.gif")
+                        render_validation_gif(in_coords, out_coords, gif_path, epoch=epoch, max_frames=25, fps=6)
+                        
+                    logger.info(f"Saved validation comparison pictures & GIFs to {epoch_vis_dir}")
+                    saved_visualizations = True
+                except Exception as e:
+                    logger.warning(f"Could not render validation visualizations: {e}")
             
     return total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
 
@@ -231,6 +290,11 @@ def main():
     writer = SummaryWriter(log_dir=log_dir)
     logger.info(f"TensorBoard logging to: {log_dir}")
     
+    # Validation visualization setup
+    vis_dir = train_config['io_paths'].get('val_vis_dir', os.path.join(save_dir, '../analysis/val_visualizations'))
+    os.makedirs(vis_dir, exist_ok=True)
+    logger.info(f"Validation visualizations will be saved to: {vis_dir}")
+
     for epoch in range(1, epochs + 1):
         # Randomize validation set each epoch
         random.shuffle(all_files)
@@ -268,7 +332,7 @@ def main():
             
         if epoch % 1 == 0:
             if len(val_dataloader) > 0:
-                val_loss = validate_epoch(model, val_dataloader, device)
+                val_loss = validate_epoch(model, val_dataloader, device, epoch=epoch, vis_dir=vis_dir)
                 logger.info(f"Epoch {epoch}/{epochs} | Validation Loss: {val_loss:.4f}")
                 writer.add_scalar('Loss/validation', val_loss, epoch)
             else:
