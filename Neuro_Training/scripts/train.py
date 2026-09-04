@@ -14,10 +14,15 @@ import glob
 import random
 from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
-from .visualize import vq_to_synthetic_3d_coords, render_validation_picture, render_validation_gif
-
-# Append the parent directory to sys.path so we can import Neuro_Model
+# Append the parent directory to sys.path so we can import Neuro_Model and sibling scripts
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.append(os.path.dirname(__file__))
+
+try:
+    from visualize import vq_to_synthetic_3d_coords, render_validation_picture, render_validation_gif
+except ImportError:
+    from .visualize import vq_to_synthetic_3d_coords, render_validation_picture, render_validation_gif
+
 from Neuro_Model.model import NeuroGramLM
 from Neuro_Dataloader.dataset import NeuroDataset
 from Neuro_Dataloader.collate import neuro_collate_fn

@@ -1,9 +1,13 @@
 # Ignore the massive SWC dataset
 SWCs/
 SWCs_test/
+analysis/
+checkpoints/
+venv/
+venv_new/
 *.swc
 
-# Ignore tokenized output and models
+# Ignore tokenized output, images and models
 *.json
 *.jsonl
 *.pkl
@@ -11,6 +15,10 @@ SWCs_test/
 *.parquet
 *.pt
 *.pth
+*.tif
+*.png
+*.gif
+*.jpg
 
 # Ignore python caches and logs
 __pycache__/
