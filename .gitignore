@@ -5,6 +5,7 @@ analysis/
 checkpoints/
 venv/
 venv_new/
+inference_*/
 *.swc
 
 # Ignore tokenized output, images and models

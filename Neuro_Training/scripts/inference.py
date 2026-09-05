@@ -461,12 +461,18 @@ class GapBridgingInferenceEngine:
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
     parser.add_argument('--source_swc', type=str, default="skeletons_connected_new.swc", help="Source fragment SWC")
-    parser.add_argument('--output_swc', type=str, default="predicted_joined_filtered_skeleton.swc", help="Output path for joined SWC")
+    parser.add_argument('--output_dir', type=str, default="inference_outputs", help="Directory to save all inference outputs and figures")
+    parser.add_argument('--output_swc', type=str, default=None, help="Custom filename for joined SWC (saved inside output_dir)")
     parser.add_argument('--tiff_volume', type=str, default="F0046_multichannel_cmle_ch03.tif", help="TIFF intensity volume")
     parser.add_argument('--checkpoint', type=str, default=None, help="Path to checkpoint (.pt)")
     parser.add_argument('--resolution', type=float, nargs=3, default=[0.112, 0.1102, 0.5], help="XYZ physical resolution (microns/voxel)")
     parser.add_argument('--reject_aberrant', action='store_true', default=True, help="Reject fragments that deviate from trained model probability")
+    parser.add_argument('--visualize', action='store_true', default=True, help="Automatically render 3D volume overlay visualization into output folder")
     args = parser.parse_args()
+
+    # Create dedicated output folder
+    os.makedirs(args.output_dir, exist_ok=True)
+    logger.info(f"Inference output directory: {os.path.abspath(args.output_dir)}")
 
     config_path = os.path.join(os.path.dirname(__file__), '../config.json')
     model_config_path = os.path.join(os.path.dirname(__file__), '../../Neuro_Model/config.json')
@@ -485,17 +491,49 @@ def main():
             ckpt = default_ckpt
             
     engine = GapBridgingInferenceEngine(model_config, train_config['inference_parameters'], device, checkpoint_path=ckpt)
-    
     phys_res = tuple(args.resolution)
     
+    swc_filename = args.output_swc if args.output_swc else "predicted_joined_filtered_skeleton.swc"
+    output_swc_path = os.path.join(args.output_dir, swc_filename)
+    
     # Run Filtered Gap Bridging and SWC Reconstruction
-    engine.bridge_and_connect_swc(
+    out_swc, accepted_count, rejected_count = engine.bridge_and_connect_swc(
         args.source_swc, 
-        args.output_swc, 
+        output_swc_path, 
         args.tiff_volume, 
         physical_resolution=phys_res,
         reject_nonconforming=args.reject_aberrant
     )
+
+    # Save summary metadata
+    meta_path = os.path.join(args.output_dir, "inference_summary.json")
+    with open(meta_path, 'w') as f:
+        json.dump({
+            "source_swc": args.source_swc,
+            "tiff_volume": args.tiff_volume,
+            "checkpoint": ckpt,
+            "physical_resolution": args.resolution,
+            "reject_aberrant": args.reject_aberrant,
+            "accepted_fragments": accepted_count,
+            "rejected_fragments": rejected_count,
+            "output_swc": out_swc
+        }, f, indent=4)
+    logger.info(f"Saved inference summary to {meta_path}")
+
+    # Render volume visualization directly in output directory
+    if args.visualize and os.path.exists(args.tiff_volume):
+        try:
+            from Neuro_Training.scripts.visualize_volume import visualize_swc_on_volume
+            fig_path = os.path.join(args.output_dir, "swc_volume_visualization.png")
+            logger.info(f"Rendering 3D volume overlay to: {fig_path}")
+            visualize_swc_on_volume(
+                tiff_path=args.tiff_volume,
+                swc_path=out_swc,
+                output_png=fig_path,
+                resolution=phys_res
+            )
+        except Exception as e:
+            logger.warning(f"Could not render visualization figure: {e}")
 
 if __name__ == "__main__":
     main()
