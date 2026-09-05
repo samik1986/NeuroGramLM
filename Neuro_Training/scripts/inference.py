@@ -292,10 +292,85 @@ class GapBridgingInferenceEngine:
             logger.warning(f"Completed scoring across candidates. Top match: {best_match} (Score: {confidence:.4f})")
             return best_match
 
-    def bridge_and_connect_swc(self, input_swc_path, output_swc_path, tiff_volume_path, physical_resolution=None, max_fragments_to_connect=500):
+    def score_fragment_conformance(self, fragment_points, physical_resolution=None):
         """
-        Parses all disconnected fragments from input_swc_path, applies Two-Stage Gap Bridging
-        to predict trajectories and bridge disconnected components, and writes the unified connected SWC.
+        Computes the model log-likelihood / cross-entropy perplexity of a given fragment sequence.
+        Returns (conformance_score, is_accepted, token_quality_penalties)
+        """
+        if len(fragment_points) < 3:
+            # Trivial fragment of <= 2 points
+            return 0.5, True, []
+
+        raw_points = np.array(fragment_points, dtype=np.float32)
+        if physical_resolution is not None:
+            res_array = np.array(physical_resolution, dtype=np.float32)
+            raw_points[:, :3] = raw_points[:, :3] * res_array
+            
+        norm_points = self.preprocessor.normalize_scale(raw_points)
+        result = self.preprocessor.tokenizer.process_fragment(norm_points) if self.preprocessor.tokenizer else {'success': False}
+        
+        if not result.get('success', False) or len(result.get('tokens', [])) < 2:
+            return 0.0, False, result.get('penalties', ['Tokenization failed'])
+
+        tokens = result['tokens']
+        MAX_LEN = 128
+        if len(tokens) > MAX_LEN:
+            tokens = tokens[:MAX_LEN]
+            
+        vq_tort = torch.tensor([[t.get('vq_ids', {}).get('tortuosity', 0) for t in tokens]], dtype=torch.long, device=self.device)
+        vq_curv = torch.tensor([[t.get('vq_ids', {}).get('curvature_energy', 0) for t in tokens]], dtype=torch.long, device=self.device)
+        vq_iner = torch.tensor([[t.get('vq_ids', {}).get('inertia_tensor', 0) for t in tokens]], dtype=torch.long, device=self.device)
+        topo_stra = torch.tensor([[t.get('embeddings', {}).get('strahler_order', 1) for t in tokens]], dtype=torch.long, device=self.device)
+        topo_wl = torch.tensor([[t.get('embeddings', {}).get('wl_hash', 0) % 1000 for t in tokens]], dtype=torch.long, device=self.device)
+
+        # Autoregressive teacher forcing loss evaluation
+        seq_len = vq_tort.size(1)
+        if seq_len < 2:
+            return 0.8, True, []
+            
+        inp_kwargs = {
+            'vq_tortuosity': vq_tort[:, :-1],
+            'vq_curvature': vq_curv[:, :-1],
+            'vq_inertia': vq_iner[:, :-1],
+            'topo_strahler': topo_stra[:, :-1],
+            'topo_wl': topo_wl[:, :-1],
+            'target_vq_tortuosity_shifted': vq_tort[:, :-1],
+            'target_vq_curvature_shifted': vq_curv[:, :-1],
+            'target_vq_inertia_shifted': vq_iner[:, :-1],
+            'target_topo_strahler_shifted': topo_stra[:, :-1],
+            'target_topo_wl_shifted': topo_wl[:, :-1],
+            'target_vq_tortuosity': vq_tort[:, 1:],
+            'target_vq_curvature': vq_curv[:, 1:],
+            'target_vq_inertia': vq_iner[:, 1:],
+            'target_topo_strahler': topo_stra[:, 1:],
+            'target_topo_wl': topo_wl[:, 1:],
+            'bio_volumes': None
+        }
+
+        with torch.no_grad():
+            out = self.model(**inp_kwargs)
+            loss_val = out['loss'].item() if isinstance(out, dict) and 'loss' in out else float(out)
+            
+        # Conformance score: higher is better (normalized exp(-loss))
+        conformance_score = float(np.exp(-min(loss_val, 20.0)))
+        quality_penalties = result.get('penalties', [])
+        
+        # Criteria for acceptance: loss threshold + quality validity
+        is_accepted = (loss_val < 4.5) and (len(quality_penalties) == 0 or 'Unrealistic tortuosity' not in ' '.join(quality_penalties))
+        return conformance_score, is_accepted, quality_penalties
+
+    def bridge_and_connect_swc(
+        self, 
+        input_swc_path, 
+        output_swc_path, 
+        tiff_volume_path, 
+        physical_resolution=None, 
+        reject_nonconforming=True,
+        max_fragments_to_connect=1000
+    ):
+        """
+        Parses all disconnected fragments, evaluates conformance against the trained NeuroGramLM,
+        rejects abnormal/non-conforming paths, and stitches valid neural arborizations into a clean connected SWC.
         """
         logger.info(f"Loading and segmenting fragments from: {input_swc_path}")
         fragments = []
@@ -325,27 +400,35 @@ class GapBridgingInferenceEngine:
         total_frags = len(fragments)
         logger.info(f"Identified {total_frags} disconnected fragments in input SWC.")
         
-        # Connect fragments sequentially or via endpoint proximity + latent trajectory
+        accepted_fragments = []
+        rejected_count = 0
+        
+        logger.info(f"Evaluating neural path conformance across fragments with trained model (reject_nonconforming={reject_nonconforming})...")
+        for idx, frag in enumerate(fragments):
+            if reject_nonconforming:
+                pts = [[n['x'], n['y'], n['z']] for n in frag]
+                score, is_acc, penalties = self.score_fragment_conformance(pts, physical_resolution=physical_resolution)
+                if not is_acc:
+                    rejected_count += 1
+                    continue
+            accepted_fragments.append(frag)
+
+        logger.info(f"Model Conformance Filtering: Kept {len(accepted_fragments)} fragments, Rejected {rejected_count} aberrant/non-conforming fragments.")
+        
+        # Connect accepted fragments
         all_nodes = []
         node_id_counter = 1
         
-        # Process and stitch fragments
-        for idx, frag in enumerate(fragments[:max_fragments_to_connect]):
-            frag_start_idx = node_id_counter
+        for idx, frag in enumerate(accepted_fragments[:max_fragments_to_connect]):
             id_map = {}
-            
             for node in frag:
                 old_id = node['id']
                 new_id = node_id_counter
                 id_map[old_id] = new_id
                 
-                # Determine parent pointer
                 if node['pid'] == -1:
-                    # If this is not the first fragment, bridge it to the previous fragment's tail node
-                    if len(all_nodes) > 0:
-                        parent_id = all_nodes[-1]['id']
-                    else:
-                        parent_id = -1
+                    # Bridge root to previous fragment's tail if available
+                    parent_id = all_nodes[-1]['id'] if len(all_nodes) > 0 else -1
                 else:
                     parent_id = id_map.get(node['pid'], -1)
                     
@@ -360,47 +443,29 @@ class GapBridgingInferenceEngine:
                 })
                 node_id_counter += 1
 
-        # If any remaining fragments exist beyond the cap, append them
-        if max_fragments_to_connect < total_frags:
-            for frag in fragments[max_fragments_to_connect:]:
-                id_map = {}
-                for node in frag:
-                    new_id = node_id_counter
-                    id_map[node['id']] = new_id
-                    parent_id = -1 if node['pid'] == -1 else id_map.get(node['pid'], -1)
-                    all_nodes.append({
-                        'id': new_id,
-                        'type': node['type'],
-                        'x': node['x'],
-                        'y': node['y'],
-                        'z': node['z'],
-                        'r': node['r'],
-                        'pid': parent_id
-                    })
-                    node_id_counter += 1
-
-        # Write output SWC
+        # Write output filtered SWC
         os.makedirs(os.path.dirname(os.path.abspath(output_swc_path)), exist_ok=True)
-        logger.info(f"Writing joined SWC ({len(all_nodes)} nodes) to: {output_swc_path}")
+        logger.info(f"Writing joined & filtered SWC ({len(all_nodes)} nodes) to: {output_swc_path}")
         with open(output_swc_path, 'w') as f:
-            f.write("# NeuroGramLM Predicted Connected Skeleton\n")
+            f.write("# NeuroGramLM Trained Model-Filtered & Connected Skeleton\n")
             f.write(f"# Input Source: {input_swc_path}\n")
-            f.write(f"# TIFF Ridge Validated: {tiff_volume_path}\n")
+            f.write(f"# Total Original Fragments: {total_frags} | Filtered Retained: {len(accepted_fragments)} | Rejected: {rejected_count}\n")
             f.write(f"# Total Nodes: {len(all_nodes)}\n")
             f.write("# ID Type X Y Z Radius Parent\n")
             for n in all_nodes:
                 f.write(f"{n['id']} {n['type']} {n['x']:.4f} {n['y']:.4f} {n['z']:.4f} {n['r']:.2f} {n['pid']}\n")
 
-        logger.info(f"Successfully exported joined SWC to {output_swc_path}")
-        return output_swc_path
+        logger.info(f"Successfully exported filtered and joined SWC to {output_swc_path}")
+        return output_swc_path, len(accepted_fragments), rejected_count
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
-    parser.add_argument('--source_swc', type=str, default="skeletons_connected_new_microns.swc", help="Source fragment SWC")
-    parser.add_argument('--output_swc', type=str, default="predicted_joined_skeleton.swc", help="Output path for joined SWC")
+    parser.add_argument('--source_swc', type=str, default="skeletons_connected_new.swc", help="Source fragment SWC")
+    parser.add_argument('--output_swc', type=str, default="predicted_joined_filtered_skeleton.swc", help="Output path for joined SWC")
     parser.add_argument('--tiff_volume', type=str, default="F0046_multichannel_cmle_ch03.tif", help="TIFF intensity volume")
     parser.add_argument('--checkpoint', type=str, default=None, help="Path to checkpoint (.pt)")
     parser.add_argument('--resolution', type=float, nargs=3, default=[0.112, 0.1102, 0.5], help="XYZ physical resolution (microns/voxel)")
+    parser.add_argument('--reject_aberrant', action='store_true', default=True, help="Reject fragments that deviate from trained model probability")
     args = parser.parse_args()
 
     config_path = os.path.join(os.path.dirname(__file__), '../config.json')
@@ -423,16 +488,13 @@ def main():
     
     phys_res = tuple(args.resolution)
     
-    # 1. Run Two-Stage Model Scoring on Source Fragment
-    candidates = [args.source_swc]
-    engine.bridge_gap(args.source_swc, candidates, args.tiff_volume, physical_resolution=phys_res)
-    
-    # 2. Reconstruct and Output Predicted Connected SWC
+    # Run Filtered Gap Bridging and SWC Reconstruction
     engine.bridge_and_connect_swc(
         args.source_swc, 
         args.output_swc, 
         args.tiff_volume, 
-        physical_resolution=phys_res
+        physical_resolution=phys_res,
+        reject_nonconforming=args.reject_aberrant
     )
 
 if __name__ == "__main__":
