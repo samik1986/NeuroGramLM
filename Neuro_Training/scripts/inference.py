@@ -326,16 +326,17 @@ class GapBridgingInferenceEngine:
         tiff_volume_path, 
         physical_resolution=None, 
         reject_nonconforming=False,
-        max_gap_distance_um=150.0,
+        max_gap_distance_um=35.0,
+        bio_bridge_threshold=0.35,
         max_fragments_to_connect=5000
     ):
         """
-        Full-Volume Gap Bridging Pipeline (Zero Rejection / All Fragments Kept):
-        1. Parses all disconnected fragments in the input SWC volume.
-        2. Builds spatial endpoint index (KD-Tree) across all fragment tips/roots.
-        3. For each dangling fragment tip, searches candidate endpoints within search radius.
-        4. Evaluates Bio Tower 3D optical intensity ridge continuity to identify true biological gap connections.
-        5. Bridges matching endpoints and outputs the complete connected skeleton.
+        Selective Single-Neuron Gap Bridging Pipeline:
+        1. Identifies all disconnected fragments in the optical volume.
+        2. Queries candidate gap pairings within plausible biological gap proximity (<= 35 μm/voxels).
+        3. Evaluates 3D optical fluorescence ridge continuity (Bio Tower) & directional trajectory alignment.
+        4. Bridges ONLY candidate fragments that share continuous optical intensity from the SAME neuron.
+        5. Preserves distinct neurons as separate disconnected root trees (pid = -1) in the output SWC.
         """
         logger.info(f"Loading and segmenting fragments from: {input_swc_path}")
         fragments = []
@@ -365,60 +366,83 @@ class GapBridgingInferenceEngine:
         total_frags = len(fragments)
         logger.info(f"Identified {total_frags} disconnected fragments in input SWC.")
         
-        # Keep all fragments (Zero Rejection Mode)
         accepted_fragments = fragments
         rejected_count = 0
-        logger.info(f"Zero Rejection Mode: Retaining all {len(accepted_fragments)} fragments across the whole volume.")
 
-        # Step 2: Extract endpoints and build Spatial Index
+        # Step 2: Extract endpoints and directional vectors for each fragment
         from scipy.spatial import cKDTree
         
         frag_heads = np.array([[f[0]['x'], f[0]['y'], f[0]['z']] for f in accepted_fragments], dtype=np.float32)
         frag_tails = np.array([[f[-1]['x'], f[-1]['y'], f[-1]['z']] for f in accepted_fragments], dtype=np.float32)
         
+        # Calculate trailing orientation vector for each fragment
+        tail_dirs = []
+        for f in accepted_fragments:
+            if len(f) >= 2:
+                v = np.array([f[-1]['x'] - f[-2]['x'], f[-1]['y'] - f[-2]['y'], f[-1]['z'] - f[-2]['z']], dtype=np.float32)
+                norm = np.linalg.norm(v)
+                tail_dirs.append(v / norm if norm > 1e-6 else np.array([1.0, 0.0, 0.0], dtype=np.float32))
+            else:
+                tail_dirs.append(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        tail_dirs = np.array(tail_dirs)
+        
         head_tree = cKDTree(frag_heads)
         
-        # Track connected links: (tail_frag_idx -> head_frag_idx)
-        connections = {} # frag_idx -> next_frag_idx
+        # Track verified biological bridges: (tail_frag_idx -> head_frag_idx)
+        connections = {} 
         used_heads = set()
         
-        logger.info(f"Executing Full-Volume Two-Stage Gap Bridging (Search Radius: {max_gap_distance_um} μm/voxels)...")
+        logger.info(f"Evaluating Selective Single-Neuron Gap Bridging (Max Gap: {max_gap_distance_um} μm/voxels, Threshold: {bio_bridge_threshold})...")
         for i, tail_pt in enumerate(frag_tails):
-            # Query candidate nearby heads within max_gap_distance
+            # Query candidate nearby heads within plausible gap distance
             candidate_indices = head_tree.query_ball_point(tail_pt, r=max_gap_distance_um)
             valid_candidates = [c for c in candidate_indices if c != i and c not in used_heads]
             
             if len(valid_candidates) == 0:
                 continue
                 
-            # Stage 2: Evaluate Bio Tower Intensity Ridge for candidate gaps
             best_candidate = None
-            best_bio_score = -float('inf')
+            best_score = -float('inf')
+            tail_dir = tail_dirs[i]
             
-            for c_idx in valid_candidates[:10]:
+            for c_idx in valid_candidates:
                 head_pt = frag_heads[c_idx]
-                dist = np.linalg.norm(tail_pt - head_pt)
+                gap_vec = head_pt - tail_pt
+                dist = np.linalg.norm(gap_vec)
+                if dist < 1e-4:
+                    continue
+                    
+                gap_unit = gap_vec / dist
+                # Directional cosine alignment between fragment growth trajectory and gap vector
+                cos_sim = float(np.dot(tail_dir, gap_unit))
                 
-                # Extract 3D TIFF patch along the bridging line
+                # Penalize sharp non-biological angle turns (> 90 degrees)
+                if cos_sim < -0.2:
+                    continue
+                    
+                # Extract 3D optical intensity ridge along gap
                 patch_tensor = self.preprocessor.extract_tiff_patch(
                     tiff_volume_path, tail_pt, head_pt
                 ) # (1, D, H, W)
                 
                 mean_intensity = patch_tensor.mean().item()
-                # Combined score balancing physical proximity and biological ridge intensity
-                score = mean_intensity - (dist / (max_gap_distance_um * 2.0))
+                max_intensity = patch_tensor.max().item()
                 
-                if score > best_bio_score:
-                    best_bio_score = score
+                # Combined biological continuity score: optical ridge fluorescence + directional continuity - distance penalty
+                bio_score = (0.6 * max_intensity + 0.4 * mean_intensity) * max(0.1, cos_sim + 0.5) - (dist / (max_gap_distance_um * 2.0))
+                
+                if bio_score > best_score:
+                    best_score = bio_score
                     best_candidate = c_idx
                     
-            if best_candidate is not None:
+            # Bridge only if above strict biological threshold for single-neuron continuity
+            if best_candidate is not None and best_score >= bio_bridge_threshold:
                 connections[i] = best_candidate
                 used_heads.add(best_candidate)
 
-        logger.info(f"Two-Stage Model successfully bridged {len(connections)} gaps across {len(accepted_fragments)} neural fragments.")
+        logger.info(f"Model identified {len(connections)} high-confidence biological gap bridges. Remaining fragments will stay as separate individual neuron trees.")
 
-        # Step 3: Reconstruct Unified Connected Graph
+        # Step 3: Reconstruct Multigraph with Independent Neuron Trees
         all_nodes = []
         node_id_counter = 1
         frag_to_node_ids = {}
@@ -445,46 +469,50 @@ class GapBridgingInferenceEngine:
                 node_id_counter += 1
             frag_to_node_ids[f_idx] = node_ids_in_frag
 
-        # Wire the predicted bridge connections into parent pointers
+        # Wire only the validated single-neuron gap bridges into parent pointers
         for src_frag, dst_frag in connections.items():
             if src_frag in frag_to_node_ids and dst_frag in frag_to_node_ids:
                 tail_node_id = frag_to_node_ids[src_frag][-1]
                 dst_head_node_id = frag_to_node_ids[dst_frag][0]
                 
-                # Update destination root parent pointer to point to source tail
+                # Connect destination root to source tail
                 for n in all_nodes:
                     if n['id'] == dst_head_node_id:
                         n['pid'] = tail_node_id
                         break
 
-        # Write output bridged SWC
+        # Calculate final number of distinct neuron trees (roots with pid == -1)
+        distinct_trees = sum(1 for n in all_nodes if n['pid'] == -1)
+        logger.info(f"Reconstructed volume contains {distinct_trees} distinct neuron trees across {len(all_nodes)} total nodes.")
+
+        # Write output selective bridged SWC
         os.makedirs(os.path.dirname(os.path.abspath(output_swc_path)), exist_ok=True)
-        logger.info(f"Writing fully bridged SWC ({len(all_nodes)} nodes, {len(connections)} bridges) to: {output_swc_path}")
+        logger.info(f"Writing selectively bridged SWC to: {output_swc_path}")
         with open(output_swc_path, 'w') as f:
-            f.write("# NeuroGramLM Full-Volume Gap Bridging Output (Zero Rejection)\n")
+            f.write("# NeuroGramLM Selective Single-Neuron Gap Bridging Output\n")
             f.write(f"# Input Source: {input_swc_path}\n")
             f.write(f"# TIFF Volume: {tiff_volume_path}\n")
-            f.write(f"# Total Disconnected Fragments: {total_frags}\n")
-            f.write(f"# Retained High-Confidence Fragments: {len(accepted_fragments)}\n")
-            f.write(f"# Model-Predicted Gap Bridges: {len(connections)}\n")
+            f.write(f"# Total Original Fragments: {total_frags}\n")
+            f.write(f"# Model-Predicted Same-Neuron Gap Bridges: {len(connections)}\n")
+            f.write(f"# Final Distinct Neuron Trees: {distinct_trees}\n")
             f.write(f"# Total Nodes: {len(all_nodes)}\n")
             f.write("# ID Type X Y Z Radius Parent\n")
             for n in all_nodes:
                 f.write(f"{n['id']} {n['type']} {n['x']:.4f} {n['y']:.4f} {n['z']:.4f} {n['r']:.2f} {n['pid']}\n")
 
-        logger.info(f"Successfully exported full-volume bridged SWC to {output_swc_path}")
-        return output_swc_path, len(accepted_fragments), rejected_count
+        logger.info(f"Successfully exported multi-neuron bridged SWC to {output_swc_path}")
+        return output_swc_path, distinct_trees, len(connections)
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
     parser.add_argument('--source_swc', type=str, default="skeletons_connected_new.swc", help="Source fragment SWC")
-    parser.add_argument('--output_dir', type=str, default="inference_outputs_full_volume", help="Directory to save all inference outputs and figures")
-    parser.add_argument('--output_swc', type=str, default="predicted_full_volume_joined.swc", help="Custom filename for joined SWC")
+    parser.add_argument('--output_dir', type=str, default="inference_outputs_selective_neurons", help="Directory to save all inference outputs and figures")
+    parser.add_argument('--output_swc', type=str, default="predicted_selective_neurons_joined.swc", help="Custom filename for joined SWC")
     parser.add_argument('--tiff_volume', type=str, default="F0046_multichannel_cmle_ch03.tif", help="TIFF intensity volume")
     parser.add_argument('--checkpoint', type=str, default=None, help="Path to checkpoint (.pt)")
     parser.add_argument('--resolution', type=float, nargs=3, default=[1.0, 1.0, 1.0], help="XYZ coordinate scaling")
-    parser.add_argument('--reject_nonconforming', action='store_true', default=False, help="Reject fragments that deviate from trained model probability")
-    parser.add_argument('--max_gap_distance', type=float, default=150.0, help="Max search distance for gap bridging")
+    parser.add_argument('--max_gap_distance', type=float, default=35.0, help="Max search distance for gap bridging (voxels/microns)")
+    parser.add_argument('--bio_threshold', type=float, default=0.35, help="Minimum biological ridge intensity and directional continuity score to bridge a gap")
     parser.add_argument('--visualize', action='store_true', default=True, help="Automatically render 3D volume overlay visualization into output folder")
     args = parser.parse_args()
 
@@ -511,17 +539,17 @@ def main():
     engine = GapBridgingInferenceEngine(model_config, train_config['inference_parameters'], device, checkpoint_path=ckpt)
     phys_res = tuple(args.resolution)
     
-    swc_filename = args.output_swc if args.output_swc else "predicted_full_volume_joined.swc"
+    swc_filename = args.output_swc if args.output_swc else "predicted_selective_neurons_joined.swc"
     output_swc_path = os.path.join(args.output_dir, swc_filename)
     
-    # Run Filtered Gap Bridging and SWC Reconstruction
-    out_swc, accepted_count, rejected_count = engine.bridge_and_connect_swc(
+    # Run Selective Gap Bridging and SWC Reconstruction
+    out_swc, distinct_trees, bridges_count = engine.bridge_and_connect_swc(
         args.source_swc, 
         output_swc_path, 
         args.tiff_volume, 
         physical_resolution=phys_res,
-        reject_nonconforming=args.reject_nonconforming,
-        max_gap_distance_um=args.max_gap_distance
+        max_gap_distance_um=args.max_gap_distance,
+        bio_bridge_threshold=args.bio_threshold
     )
 
     # Save summary metadata
@@ -532,10 +560,10 @@ def main():
             "tiff_volume": args.tiff_volume,
             "checkpoint": ckpt,
             "physical_resolution": args.resolution,
-            "reject_nonconforming": args.reject_nonconforming,
             "max_gap_distance": args.max_gap_distance,
-            "accepted_fragments": accepted_count,
-            "rejected_fragments": rejected_count,
+            "bio_bridge_threshold": args.bio_threshold,
+            "distinct_neuron_trees": distinct_trees,
+            "bridges_constructed": bridges_count,
             "output_swc": out_swc
         }, f, indent=4)
     logger.info(f"Saved inference summary to {meta_path}")
