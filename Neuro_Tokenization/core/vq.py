@@ -26,8 +26,10 @@ class MultimodalVQ:
     def load(self):
         """Loads trained codebooks if they exist."""
         all_loaded = True
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_dir = self.model_dir if os.path.isabs(self.model_dir) else os.path.join(base_dir, self.model_dir.lstrip('./'))
         for modality in self.vocab_sizes.keys():
-            path = os.path.join(self.model_dir, f"kmeans_{modality}.pkl")
+            path = os.path.join(model_dir, f"kmeans_{modality}.pkl")
             if os.path.exists(path):
                 with open(path, 'rb') as f:
                     self.codebooks[modality] = pickle.load(f)
@@ -38,9 +40,11 @@ class MultimodalVQ:
 
     def save(self):
         """Saves trained codebooks."""
-        os.makedirs(self.model_dir, exist_ok=True)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_dir = self.model_dir if os.path.isabs(self.model_dir) else os.path.join(base_dir, self.model_dir.lstrip('./'))
+        os.makedirs(model_dir, exist_ok=True)
         for modality, model in self.codebooks.items():
-            path = os.path.join(self.model_dir, f"kmeans_{modality}.pkl")
+            path = os.path.join(model_dir, f"kmeans_{modality}.pkl")
             with open(path, 'wb') as f:
                 pickle.dump(model, f)
 
