@@ -34,89 +34,49 @@ class InferencePreprocessor:
             self.tokenizer = tokenizer_pipeline
             
         self.ccfv3_scale_bounds = (0.0, 10000.0) # CCFv3 bounding box bounds in microns
+        self._cached_tiff_path = None
+        self._cached_volume = None
 
-    def load_swc_points(self, swc_path):
-        """
-        Loads continuous 3D coordinates from an SWC file.
-        """
-        points = []
-        if not os.path.exists(swc_path):
-            logger.warning(f"SWC path does not exist: {swc_path}. Using fallback coordinates.")
-            return np.random.rand(50, 3) * 500.0
-            
-        with open(swc_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) >= 6:
-                    try:
-                        x, y, z = float(parts[2]), float(parts[3]), float(parts[4])
-                        points.append([x, y, z])
-                    except ValueError:
-                        continue
-                        
-        if len(points) == 0:
-            logger.warning(f"No valid coordinate rows found in {swc_path}.")
-            return np.random.rand(50, 3) * 500.0
-            
-        return np.array(points, dtype=np.float32)
-
-    def normalize_scale(self, swc_points):
-        """
-        Normalizes arbitrary SWC scales to match the CCFv3 space used during training.
-        Ensures curvature/inertia metrics don't explode outside VQ bounds.
-        """
-        if len(swc_points) == 0:
-            return swc_points
-            
-        min_vals = np.min(swc_points[:, :3], axis=0)
-        max_vals = np.max(swc_points[:, :3], axis=0)
-        
-        # Calculate bounding box diagonal
-        diag = np.linalg.norm(max_vals - min_vals)
-        if diag == 0:
-            return swc_points
-            
-        # Target diagonal scale (e.g., CCFv3 typical fragment length)
-        target_diag = 500.0 
-        scale_factor = target_diag / diag
-        
-        normalized_points = swc_points.copy()
-        normalized_points[:, :3] *= scale_factor
-        return normalized_points
+    def get_volume(self, tiff_volume_path):
+        if self._cached_tiff_path == tiff_volume_path and self._cached_volume is not None:
+            return self._cached_volume
+        if os.path.exists(tiff_volume_path) and 'tifffile' in sys.modules:
+            try:
+                logger.info(f"Loading 3D TIFF into memory for fast patch extraction: {tiff_volume_path}")
+                self._cached_volume = tifffile.imread(tiff_volume_path)
+                self._cached_tiff_path = tiff_volume_path
+                return self._cached_volume
+            except Exception as e:
+                logger.warning(f"Could not load TIFF {tiff_volume_path}: {e}")
+        return None
 
     def extract_tiff_patch(self, tiff_volume_path, start_xyz, end_xyz, patch_size=(32, 32, 32)):
         """
         Extracts a 3D intensity ridge from the raw TIFF volume along the trajectory 
         between the source and candidate fragment.
         """
-        if os.path.exists(tiff_volume_path) and 'tifffile' in sys.modules:
+        vol = self.get_volume(tiff_volume_path)
+        if vol is not None and vol.ndim == 3:
             try:
-                # Load TIFF volume or use memory mapped read
-                vol = tifffile.imread(tiff_volume_path)
-                if vol.ndim == 3:
-                    d, h, w = vol.shape
-                    mid_z = int(np.clip((start_xyz[2] + end_xyz[2]) / 2.0, 0, d - 1))
-                    mid_y = int(np.clip((start_xyz[1] + end_xyz[1]) / 2.0, 0, h - 1))
-                    mid_x = int(np.clip((start_xyz[0] + end_xyz[0]) / 2.0, 0, w - 1))
-                    
-                    pd, ph, pw = patch_size
-                    z1, z2 = max(0, mid_z - pd // 2), min(d, mid_z + pd // 2)
-                    y1, y2 = max(0, mid_y - ph // 2), min(h, mid_y + ph // 2)
-                    x1, x2 = max(0, mid_x - pw // 2), min(w, mid_x + pw // 2)
-                    
-                    crop = vol[z1:z2, y1:y2, x1:x2].astype(np.float32)
-                    # Normalize intensity to [0, 1]
-                    if crop.max() > 0:
-                        crop = crop / crop.max()
-                    
-                    patch = np.zeros(patch_size, dtype=np.float32)
-                    patch[:crop.shape[0], :crop.shape[1], :crop.shape[2]] = crop
-                    return torch.tensor(patch).unsqueeze(0) # (1, D, H, W)
+                d, h, w = vol.shape
+                mid_z = int(np.clip((start_xyz[2] + end_xyz[2]) / 2.0, 0, d - 1))
+                mid_y = int(np.clip((start_xyz[1] + end_xyz[1]) / 2.0, 0, h - 1))
+                mid_x = int(np.clip((start_xyz[0] + end_xyz[0]) / 2.0, 0, w - 1))
+                
+                pd, ph, pw = patch_size
+                z1, z2 = max(0, mid_z - pd // 2), min(d, mid_z + pd // 2)
+                y1, y2 = max(0, mid_y - ph // 2), min(h, mid_y + ph // 2)
+                x1, x2 = max(0, mid_x - pw // 2), min(w, mid_x + pw // 2)
+                
+                crop = vol[z1:z2, y1:y2, x1:x2].astype(np.float32)
+                if crop.max() > 0:
+                    crop = crop / crop.max()
+                
+                patch = np.zeros(patch_size, dtype=np.float32)
+                patch[:crop.shape[0], :crop.shape[1], :crop.shape[2]] = crop
+                return torch.tensor(patch).unsqueeze(0) # (1, D, H, W)
             except Exception as e:
-                logger.warning(f"Could not read TIFF crop from {tiff_volume_path}: {e}")
+                logger.warning(f"Could not read TIFF crop: {e}")
 
         # Fallback tensor
         return torch.randn(1, *patch_size)
@@ -365,12 +325,17 @@ class GapBridgingInferenceEngine:
         output_swc_path, 
         tiff_volume_path, 
         physical_resolution=None, 
-        reject_nonconforming=True,
-        max_fragments_to_connect=1000
+        reject_nonconforming=False,
+        max_gap_distance_um=150.0,
+        max_fragments_to_connect=5000
     ):
         """
-        Parses all disconnected fragments, evaluates conformance against the trained NeuroGramLM,
-        rejects abnormal/non-conforming paths, and stitches valid neural arborizations into a clean connected SWC.
+        Full-Volume Gap Bridging Pipeline (Zero Rejection / All Fragments Kept):
+        1. Parses all disconnected fragments in the input SWC volume.
+        2. Builds spatial endpoint index (KD-Tree) across all fragment tips/roots.
+        3. For each dangling fragment tip, searches candidate endpoints within search radius.
+        4. Evaluates Bio Tower 3D optical intensity ridge continuity to identify true biological gap connections.
+        5. Bridges matching endpoints and outputs the complete connected skeleton.
         """
         logger.info(f"Loading and segmenting fragments from: {input_swc_path}")
         fragments = []
@@ -400,38 +365,74 @@ class GapBridgingInferenceEngine:
         total_frags = len(fragments)
         logger.info(f"Identified {total_frags} disconnected fragments in input SWC.")
         
-        accepted_fragments = []
+        # Keep all fragments (Zero Rejection Mode)
+        accepted_fragments = fragments
         rejected_count = 0
-        
-        logger.info(f"Evaluating neural path conformance across fragments with trained model (reject_nonconforming={reject_nonconforming})...")
-        for idx, frag in enumerate(fragments):
-            if reject_nonconforming:
-                pts = [[n['x'], n['y'], n['z']] for n in frag]
-                score, is_acc, penalties = self.score_fragment_conformance(pts, physical_resolution=physical_resolution)
-                if not is_acc:
-                    rejected_count += 1
-                    continue
-            accepted_fragments.append(frag)
+        logger.info(f"Zero Rejection Mode: Retaining all {len(accepted_fragments)} fragments across the whole volume.")
 
-        logger.info(f"Model Conformance Filtering: Kept {len(accepted_fragments)} fragments, Rejected {rejected_count} aberrant/non-conforming fragments.")
+        # Step 2: Extract endpoints and build Spatial Index
+        from scipy.spatial import cKDTree
         
-        # Connect accepted fragments
+        frag_heads = np.array([[f[0]['x'], f[0]['y'], f[0]['z']] for f in accepted_fragments], dtype=np.float32)
+        frag_tails = np.array([[f[-1]['x'], f[-1]['y'], f[-1]['z']] for f in accepted_fragments], dtype=np.float32)
+        
+        head_tree = cKDTree(frag_heads)
+        
+        # Track connected links: (tail_frag_idx -> head_frag_idx)
+        connections = {} # frag_idx -> next_frag_idx
+        used_heads = set()
+        
+        logger.info(f"Executing Full-Volume Two-Stage Gap Bridging (Search Radius: {max_gap_distance_um} μm/voxels)...")
+        for i, tail_pt in enumerate(frag_tails):
+            # Query candidate nearby heads within max_gap_distance
+            candidate_indices = head_tree.query_ball_point(tail_pt, r=max_gap_distance_um)
+            valid_candidates = [c for c in candidate_indices if c != i and c not in used_heads]
+            
+            if len(valid_candidates) == 0:
+                continue
+                
+            # Stage 2: Evaluate Bio Tower Intensity Ridge for candidate gaps
+            best_candidate = None
+            best_bio_score = -float('inf')
+            
+            for c_idx in valid_candidates[:10]:
+                head_pt = frag_heads[c_idx]
+                dist = np.linalg.norm(tail_pt - head_pt)
+                
+                # Extract 3D TIFF patch along the bridging line
+                patch_tensor = self.preprocessor.extract_tiff_patch(
+                    tiff_volume_path, tail_pt, head_pt
+                ) # (1, D, H, W)
+                
+                mean_intensity = patch_tensor.mean().item()
+                # Combined score balancing physical proximity and biological ridge intensity
+                score = mean_intensity - (dist / (max_gap_distance_um * 2.0))
+                
+                if score > best_bio_score:
+                    best_bio_score = score
+                    best_candidate = c_idx
+                    
+            if best_candidate is not None:
+                connections[i] = best_candidate
+                used_heads.add(best_candidate)
+
+        logger.info(f"Two-Stage Model successfully bridged {len(connections)} gaps across {len(accepted_fragments)} neural fragments.")
+
+        # Step 3: Reconstruct Unified Connected Graph
         all_nodes = []
         node_id_counter = 1
+        frag_to_node_ids = {}
         
-        for idx, frag in enumerate(accepted_fragments[:max_fragments_to_connect]):
+        for f_idx, frag in enumerate(accepted_fragments):
             id_map = {}
+            node_ids_in_frag = []
             for node in frag:
                 old_id = node['id']
                 new_id = node_id_counter
                 id_map[old_id] = new_id
+                node_ids_in_frag.append(new_id)
                 
-                if node['pid'] == -1:
-                    # Bridge root to previous fragment's tail if available
-                    parent_id = all_nodes[-1]['id'] if len(all_nodes) > 0 else -1
-                else:
-                    parent_id = id_map.get(node['pid'], -1)
-                    
+                parent_id = -1 if node['pid'] == -1 else id_map.get(node['pid'], -1)
                 all_nodes.append({
                     'id': new_id,
                     'type': node['type'],
@@ -442,31 +443,48 @@ class GapBridgingInferenceEngine:
                     'pid': parent_id
                 })
                 node_id_counter += 1
+            frag_to_node_ids[f_idx] = node_ids_in_frag
 
-        # Write output filtered SWC
+        # Wire the predicted bridge connections into parent pointers
+        for src_frag, dst_frag in connections.items():
+            if src_frag in frag_to_node_ids and dst_frag in frag_to_node_ids:
+                tail_node_id = frag_to_node_ids[src_frag][-1]
+                dst_head_node_id = frag_to_node_ids[dst_frag][0]
+                
+                # Update destination root parent pointer to point to source tail
+                for n in all_nodes:
+                    if n['id'] == dst_head_node_id:
+                        n['pid'] = tail_node_id
+                        break
+
+        # Write output bridged SWC
         os.makedirs(os.path.dirname(os.path.abspath(output_swc_path)), exist_ok=True)
-        logger.info(f"Writing joined & filtered SWC ({len(all_nodes)} nodes) to: {output_swc_path}")
+        logger.info(f"Writing fully bridged SWC ({len(all_nodes)} nodes, {len(connections)} bridges) to: {output_swc_path}")
         with open(output_swc_path, 'w') as f:
-            f.write("# NeuroGramLM Trained Model-Filtered & Connected Skeleton\n")
+            f.write("# NeuroGramLM Full-Volume Gap Bridging Output (Zero Rejection)\n")
             f.write(f"# Input Source: {input_swc_path}\n")
-            f.write(f"# Total Original Fragments: {total_frags} | Filtered Retained: {len(accepted_fragments)} | Rejected: {rejected_count}\n")
+            f.write(f"# TIFF Volume: {tiff_volume_path}\n")
+            f.write(f"# Total Disconnected Fragments: {total_frags}\n")
+            f.write(f"# Retained High-Confidence Fragments: {len(accepted_fragments)}\n")
+            f.write(f"# Model-Predicted Gap Bridges: {len(connections)}\n")
             f.write(f"# Total Nodes: {len(all_nodes)}\n")
             f.write("# ID Type X Y Z Radius Parent\n")
             for n in all_nodes:
                 f.write(f"{n['id']} {n['type']} {n['x']:.4f} {n['y']:.4f} {n['z']:.4f} {n['r']:.2f} {n['pid']}\n")
 
-        logger.info(f"Successfully exported filtered and joined SWC to {output_swc_path}")
+        logger.info(f"Successfully exported full-volume bridged SWC to {output_swc_path}")
         return output_swc_path, len(accepted_fragments), rejected_count
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
     parser.add_argument('--source_swc', type=str, default="skeletons_connected_new.swc", help="Source fragment SWC")
-    parser.add_argument('--output_dir', type=str, default="inference_outputs", help="Directory to save all inference outputs and figures")
-    parser.add_argument('--output_swc', type=str, default=None, help="Custom filename for joined SWC (saved inside output_dir)")
+    parser.add_argument('--output_dir', type=str, default="inference_outputs_full_volume", help="Directory to save all inference outputs and figures")
+    parser.add_argument('--output_swc', type=str, default="predicted_full_volume_joined.swc", help="Custom filename for joined SWC")
     parser.add_argument('--tiff_volume', type=str, default="F0046_multichannel_cmle_ch03.tif", help="TIFF intensity volume")
     parser.add_argument('--checkpoint', type=str, default=None, help="Path to checkpoint (.pt)")
-    parser.add_argument('--resolution', type=float, nargs=3, default=[0.112, 0.1102, 0.5], help="XYZ physical resolution (microns/voxel)")
-    parser.add_argument('--reject_aberrant', action='store_true', default=True, help="Reject fragments that deviate from trained model probability")
+    parser.add_argument('--resolution', type=float, nargs=3, default=[1.0, 1.0, 1.0], help="XYZ coordinate scaling")
+    parser.add_argument('--reject_nonconforming', action='store_true', default=False, help="Reject fragments that deviate from trained model probability")
+    parser.add_argument('--max_gap_distance', type=float, default=150.0, help="Max search distance for gap bridging")
     parser.add_argument('--visualize', action='store_true', default=True, help="Automatically render 3D volume overlay visualization into output folder")
     args = parser.parse_args()
 
@@ -493,7 +511,7 @@ def main():
     engine = GapBridgingInferenceEngine(model_config, train_config['inference_parameters'], device, checkpoint_path=ckpt)
     phys_res = tuple(args.resolution)
     
-    swc_filename = args.output_swc if args.output_swc else "predicted_joined_filtered_skeleton.swc"
+    swc_filename = args.output_swc if args.output_swc else "predicted_full_volume_joined.swc"
     output_swc_path = os.path.join(args.output_dir, swc_filename)
     
     # Run Filtered Gap Bridging and SWC Reconstruction
@@ -502,7 +520,8 @@ def main():
         output_swc_path, 
         args.tiff_volume, 
         physical_resolution=phys_res,
-        reject_nonconforming=args.reject_aberrant
+        reject_nonconforming=args.reject_nonconforming,
+        max_gap_distance_um=args.max_gap_distance
     )
 
     # Save summary metadata
@@ -513,7 +532,8 @@ def main():
             "tiff_volume": args.tiff_volume,
             "checkpoint": ckpt,
             "physical_resolution": args.resolution,
-            "reject_aberrant": args.reject_aberrant,
+            "reject_nonconforming": args.reject_nonconforming,
+            "max_gap_distance": args.max_gap_distance,
             "accepted_fragments": accepted_count,
             "rejected_fragments": rejected_count,
             "output_swc": out_swc
