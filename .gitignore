@@ -6,6 +6,7 @@ checkpoints/
 venv/
 venv_new/
 inference_*/
+intensity_pipeline_*/
 *.swc
 
 # Ignore tokenized output, images and models

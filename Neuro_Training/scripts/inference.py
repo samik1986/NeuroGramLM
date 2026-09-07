@@ -94,7 +94,8 @@ class InferencePreprocessor:
             res_array = np.array(physical_resolution, dtype=np.float32)
             raw_points[:, :3] = raw_points[:, :3] * res_array
             
-        norm_points = self.normalize_scale(raw_points)
+        # Tokenizer processes physical coordinates directly
+        norm_points = raw_points
         endpoint = norm_points[-1, :3] if len(norm_points) > 0 else np.array([0.0, 0.0, 0.0])
         
         if self.tokenizer is not None:
@@ -266,7 +267,7 @@ class GapBridgingInferenceEngine:
             res_array = np.array(physical_resolution, dtype=np.float32)
             raw_points[:, :3] = raw_points[:, :3] * res_array
             
-        norm_points = self.preprocessor.normalize_scale(raw_points)
+        norm_points = raw_points
         result = self.preprocessor.tokenizer.process_fragment(norm_points) if self.preprocessor.tokenizer else {'success': False}
         
         if not result.get('success', False) or len(result.get('tokens', [])) < 2:
@@ -319,6 +320,174 @@ class GapBridgingInferenceEngine:
         is_accepted = (loss_val < 4.5) and (len(quality_penalties) == 0 or 'Unrealistic tortuosity' not in ' '.join(quality_penalties))
         return conformance_score, is_accepted, quality_penalties
 
+    def _generative_extend_and_branch(self, all_nodes, tiff_volume_path, bio_threshold):
+        logger.info("Executing generative fragment extension and branching...")
+        vol = self.preprocessor.get_volume(tiff_volume_path)
+        if vol is None:
+            logger.warning("TIFF volume not found, skipping generative extension.")
+            return
+
+        d, h, w = vol.shape
+        # Use robust percentile for normalization to avoid outlier pixels squashing intensities
+        sample_vol = vol[::4, ::8, ::8]
+        vol_max = float(np.percentile(sample_vol, 99.9))
+        if vol_max <= 0.0: vol_max = 1.0
+        
+        node_by_id = {n['id']: n for n in all_nodes}
+        children_by_pid = {}
+        for n in all_nodes:
+            children_by_pid.setdefault(n['pid'], []).append(n['id'])
+            
+        leaf_nodes = []
+        root_nodes = []
+        for n in all_nodes:
+            if n['id'] not in children_by_pid:
+                leaf_nodes.append(n)
+            if n['pid'] == -1:
+                root_nodes.append(n)
+                
+        max_id = max(n['id'] for n in all_nodes) if all_nodes else 0
+        
+        def sample_intensity(x, y, z):
+            ix, iy, iz = int(round(x)), int(round(y)), int(round(z))
+            if 0 <= iz < d and 0 <= iy < h and 0 <= ix < w:
+                return float(vol[iz, iy, ix]) / vol_max
+            return 0.0
+
+        new_nodes = []
+        extension_count = 0
+        
+        def autoregressive_extend(start_node, vector, is_root=False):
+            nonlocal max_id, extension_count
+            
+            # Reconstruct local fragment context (up to 12 nodes)
+            context = []
+            curr_n = start_node
+            for _ in range(12):
+                if not curr_n: break
+                context.append(curr_n)
+                curr_n = node_by_id.get(curr_n['pid'])
+            if not is_root: context.reverse()
+            
+            context_pts = [np.array([n['x'], n['y'], n['z']]) for n in context]
+            
+            curr_parent_id = start_node['id']
+            added = 0
+            
+            # Base direction vector
+            v_dir = vector / (np.linalg.norm(vector) + 1e-6)
+            
+            while added < 150: # max extension steps
+                # 1. Generate hemispherical candidate points
+                if abs(v_dir[0]) < 0.9: temp = np.array([1.0, 0.0, 0.0])
+                else: temp = np.array([0.0, 1.0, 0.0])
+                
+                u1 = np.cross(v_dir, temp)
+                u1 /= (np.linalg.norm(u1) + 1e-6)
+                u2 = np.cross(v_dir, u1)
+                
+                best_candidate = None
+                best_score = -1.0
+                
+                # Sample 8 radial directions + 1 straight forward
+                candidates = []
+                candidates.append(v_dir * 2.0)
+                for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+                    dir_vec = np.cos(angle) * u1 + np.sin(angle) * u2
+                    # 45 degree spread hemisphere
+                    candidates.append((v_dir + dir_vec * 0.5) * 2.0)
+                    
+                curr_pos = context_pts[-1] if not is_root else context_pts[0]
+                
+                for cand_step in candidates:
+                    raw_pt = curr_pos + cand_step
+                    
+                    # 2. Adaptive Ridge-Peak Snap (7x7x5 grid)
+                    cx, cy, cz = int(round(raw_pt[0])), int(round(raw_pt[1])), int(round(raw_pt[2]))
+                    max_i = -1.0
+                    best_snap = raw_pt
+                    for dz in [-2, -1, 0, 1, 2]:
+                        for dy in [-3, -2, -1, 0, 1, 2, 3]:
+                            for dx in [-3, -2, -1, 0, 1, 2, 3]:
+                                nz, ny, nx = cz+dz, cy+dy, cx+dx
+                                if 0 <= nz < d and 0 <= ny < h and 0 <= nx < w:
+                                    val = float(vol[nz, ny, nx]) / vol_max
+                                    if val > max_i:
+                                        max_i = val
+                                        best_snap = np.array([float(nx), float(ny), float(nz)])
+                    
+                    if max_i < bio_threshold:
+                        continue
+                        
+                    # 3. Autoregressive LLM Sequence Evaluation
+                    temp_seq = list(context_pts)
+                    if is_root:
+                        temp_seq.insert(0, best_snap)
+                    else:
+                        temp_seq.append(best_snap)
+                        
+                    # Evaluate sequence
+                    conf_score, is_valid, _ = self.score_fragment_conformance(temp_seq, physical_resolution=(0.1102, 0.1102, 0.5))
+                    
+                    # 4. Joint Score (Geometry * Intensity Ridge)
+                    joint_score = conf_score * max_i
+                    
+                    if joint_score > best_score and is_valid:
+                        best_score = joint_score
+                        best_candidate = best_snap
+                        
+                if best_candidate is not None:
+                    max_id += 1
+                    new_node = {
+                        'id': max_id, 'type': start_node['type'],
+                        'x': float(best_candidate[0]), 'y': float(best_candidate[1]), 'z': float(best_candidate[2]),
+                        'r': start_node['r'], 'pid': curr_parent_id if not is_root else -1
+                    }
+                    if is_root:
+                        # If extending a root, the new node becomes the new root, and old root points to it
+                        start_node['pid'] = max_id
+                        curr_parent_id = max_id
+                        context_pts.insert(0, best_candidate)
+                        # We must update the old root in place if possible, but for simplicity, we just link
+                    else:
+                        new_nodes.append(new_node)
+                        curr_parent_id = max_id
+                        context_pts.append(best_candidate)
+                        
+                    v_dir = (best_candidate - curr_pos)
+                    v_dir /= (np.linalg.norm(v_dir) + 1e-6)
+                    extension_count += 1
+                    added += 1
+                else:
+                    break
+
+        for leaf in leaf_nodes:
+            if leaf['type'] == 1: continue
+            if leaf['pid'] in node_by_id:
+                p = node_by_id[leaf['pid']]
+                vec = np.array([leaf['x'] - p['x'], leaf['y'] - p['y'], leaf['z'] - p['z']])
+                autoregressive_extend(leaf, vec, is_root=False)
+                
+        for root in root_nodes:
+            if root['type'] == 1: continue
+            children = children_by_pid.get(root['id'], [])
+            if children:
+                c = node_by_id[children[0]]
+                vec = np.array([root['x'] - c['x'], root['y'] - c['y'], root['z'] - c['z']])
+                autoregressive_extend(root, vec, is_root=True)
+
+        visited_voxels = set()
+        for n in all_nodes + new_nodes:
+            cx, cy, cz = int(round(n['x'])), int(round(n['y'])), int(round(n['z']))
+            for dz in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        visited_voxels.add((cz + dz, cy + dy, cx + dx))
+
+        branch_count = 0
+        all_nodes.extend(new_nodes)
+        logger.info(f"Generative extension added {extension_count} nodes. Generative branching added {branch_count} branches.")
+
     def bridge_and_connect_swc(
         self, 
         input_swc_path, 
@@ -366,8 +535,40 @@ class GapBridgingInferenceEngine:
         total_frags = len(fragments)
         logger.info(f"Identified {total_frags} disconnected fragments in input SWC.")
         
-        accepted_fragments = fragments
-        rejected_count = 0
+        # Step 1.5: Reject non-conforming outlier fragments not following biological model geometry
+        accepted_fragments = []
+        rejected_fragments = []
+        
+        for f_idx, frag in enumerate(fragments):
+            pts = np.array([[n['x'], n['y'], n['z']] for n in frag], dtype=np.float32)
+            is_valid = True
+            rejection_reason = None
+            
+            # Outlier Check 1: Severe spatial jump between consecutive nodes (> 120 μm/voxels)
+            if len(pts) >= 2:
+                diffs = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+                max_step = np.max(diffs)
+                if max_step > 120.0:
+                    is_valid = False
+                    rejection_reason = f"Extreme node jump ({max_step:.1f} units)"
+                    
+            # Outlier Check 2: Severe non-biological loop / zigzag artifact
+            if is_valid and len(pts) >= 4:
+                path_len = np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1))
+                displacement = np.linalg.norm(pts[-1] - pts[0])
+                if displacement > 1e-4 and (path_len / displacement) > 20.0 and path_len > 50.0:
+                    is_valid = False
+                    rejection_reason = f"Extreme loop artifact (tortuosity {(path_len/displacement):.1f})"
+                    
+            if is_valid:
+                accepted_fragments.append(frag)
+            else:
+                rejected_fragments.append((f_idx, rejection_reason))
+                
+        rejected_count = len(rejected_fragments)
+        logger.info(f"Model Conformance Filtering: Accepted {len(accepted_fragments)} fragments, Rejected {rejected_count} aberrant outliers.")
+        if rejected_count > 0:
+            logger.info(f"Sample rejections: {rejected_fragments[:5]}")
 
         # Step 2: Extract endpoints and directional vectors for each fragment
         from scipy.spatial import cKDTree
@@ -485,6 +686,9 @@ class GapBridgingInferenceEngine:
         distinct_trees = sum(1 for n in all_nodes if n['pid'] == -1)
         logger.info(f"Reconstructed volume contains {distinct_trees} distinct neuron trees across {len(all_nodes)} total nodes.")
 
+        # Apply generative extensions and branching
+        self._generative_extend_and_branch(all_nodes, tiff_volume_path, bio_bridge_threshold)
+
         # Write output selective bridged SWC
         os.makedirs(os.path.dirname(os.path.abspath(output_swc_path)), exist_ok=True)
         logger.info(f"Writing selectively bridged SWC to: {output_swc_path}")
@@ -493,6 +697,8 @@ class GapBridgingInferenceEngine:
             f.write(f"# Input Source: {input_swc_path}\n")
             f.write(f"# TIFF Volume: {tiff_volume_path}\n")
             f.write(f"# Total Original Fragments: {total_frags}\n")
+            f.write(f"# Accepted Conforming Fragments: {len(accepted_fragments)}\n")
+            f.write(f"# Rejected Non-Conforming Fragments: {rejected_count}\n")
             f.write(f"# Model-Predicted Same-Neuron Gap Bridges: {len(connections)}\n")
             f.write(f"# Final Distinct Neuron Trees: {distinct_trees}\n")
             f.write(f"# Total Nodes: {len(all_nodes)}\n")
@@ -501,7 +707,7 @@ class GapBridgingInferenceEngine:
                 f.write(f"{n['id']} {n['type']} {n['x']:.4f} {n['y']:.4f} {n['z']:.4f} {n['r']:.2f} {n['pid']}\n")
 
         logger.info(f"Successfully exported multi-neuron bridged SWC to {output_swc_path}")
-        return output_swc_path, distinct_trees, len(connections)
+        return output_swc_path, distinct_trees, len(connections), rejected_count
 
 def main():
     parser = argparse.ArgumentParser(description="NeuroGramLM Inference Engine")
@@ -543,7 +749,7 @@ def main():
     output_swc_path = os.path.join(args.output_dir, swc_filename)
     
     # Run Selective Gap Bridging and SWC Reconstruction
-    out_swc, distinct_trees, bridges_count = engine.bridge_and_connect_swc(
+    out_swc, distinct_trees, bridges_count, rejected_count = engine.bridge_and_connect_swc(
         args.source_swc, 
         output_swc_path, 
         args.tiff_volume, 
@@ -564,6 +770,7 @@ def main():
             "bio_bridge_threshold": args.bio_threshold,
             "distinct_neuron_trees": distinct_trees,
             "bridges_constructed": bridges_count,
+            "rejected_fragments_count": rejected_count,
             "output_swc": out_swc
         }, f, indent=4)
     logger.info(f"Saved inference summary to {meta_path}")

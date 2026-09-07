@@ -82,8 +82,9 @@ def visualize_swc_on_volume(
     crop_z1, crop_z2 = int(max(0, min_z - pad_z)), int(min(D, max_z + pad_z))
     
     subvol = vol[crop_z1:crop_z2, crop_y1:crop_y2, crop_x1:crop_x2].astype(np.float32)
-    # Background subtraction / percentile contrast stretch
-    p1, p99 = np.percentile(subvol, 5), np.percentile(subvol, 99.8)
+    # Fast background subtraction / percentile contrast stretch on downsampled sample
+    sample_subvol = subvol[::2, ::4, ::4]
+    p1, p99 = np.percentile(sample_subvol, 5), np.percentile(sample_subvol, 99.8)
     subvol = np.clip((subvol - p1) / (p99 - p1 + 1e-6), 0, 1)
     
     # Compute Maximum Intensity Projections (MIP)
@@ -98,13 +99,22 @@ def visualize_swc_on_volume(
     ax3d = fig.add_subplot(2, 2, 1, projection='3d', facecolor='#0d1117')
     ax3d.set_title("3D Neural Skeleton in Physical Space (Microns)", color='#58a6ff', fontsize=12, fontweight='bold', pad=12)
     
-    # Render all 3D edges
+    # Render 3D line segments in batch
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+    from matplotlib.collections import LineCollection
+    
+    lines_3d = []
     for p_id, c_id in edges:
         if p_id in nodes and c_id in nodes:
-            x_pair = [nodes[p_id][0], nodes[c_id][0]]
-            y_pair = [nodes[p_id][1], nodes[c_id][1]]
-            z_pair = [nodes[p_id][2], nodes[c_id][2]]
-            ax3d.plot(x_pair, y_pair, z_pair, color='#38ef7d', alpha=0.6, linewidth=0.8)
+            lines_3d.append([(nodes[p_id][0], nodes[p_id][1], nodes[p_id][2]),
+                             (nodes[c_id][0], nodes[c_id][1], nodes[c_id][2])])
+    if lines_3d:
+        lc3d = Line3DCollection(lines_3d, colors='#38ef7d', alpha=0.6, linewidths=0.8)
+        ax3d.add_collection3d(lc3d)
+        all_pts_3d = np.array([[nodes[nid][0], nodes[nid][1], nodes[nid][2]] for nid in nodes])
+        ax3d.set_xlim(np.min(all_pts_3d[:, 0]), np.max(all_pts_3d[:, 0]))
+        ax3d.set_ylim(np.min(all_pts_3d[:, 1]), np.max(all_pts_3d[:, 1]))
+        ax3d.set_zlim(np.min(all_pts_3d[:, 2]), np.max(all_pts_3d[:, 2]))
             
     # Highlight endpoints / roots
     root_nodes = [nid for nid, val in nodes.items() if val[5] == -1]
@@ -126,12 +136,15 @@ def visualize_swc_on_volume(
     ax_xy.set_title("XY Plane (MIP) Intensity & Continuous SWC Overlay", color='#58a6ff', fontsize=12, fontweight='bold')
     ax_xy.imshow(mip_xy, cmap='magma', extent=[crop_x1, crop_x2, crop_y2, crop_y1], origin='upper', alpha=0.85)
     
-    # Plot EVERY edge without downsampling stride to preserve continuous filaments
+    # Render all 2D edges using fast LineCollection
+    lines_xy = []
     for p_id, c_id in edges:
         if p_id in voxel_coords and c_id in voxel_coords:
-            xp = [voxel_coords[p_id][0], voxel_coords[c_id][0]]
-            yp = [voxel_coords[p_id][1], voxel_coords[c_id][1]]
-            ax_xy.plot(xp, yp, color='#00ffcc', alpha=0.8, linewidth=1.1)
+            lines_xy.append([(voxel_coords[p_id][0], voxel_coords[p_id][1]),
+                             (voxel_coords[c_id][0], voxel_coords[c_id][1])])
+    if lines_xy:
+        lc_xy = LineCollection(lines_xy, colors='#00ffcc', alpha=0.8, linewidths=1.1)
+        ax_xy.add_collection(lc_xy)
             
     ax_xy.set_xlabel('X (voxels)', color='white', fontsize=9)
     ax_xy.set_ylabel('Y (voxels)', color='white', fontsize=9)
@@ -144,11 +157,14 @@ def visualize_swc_on_volume(
     ax_xz.set_title("XZ Plane (MIP) Depth Profile & Continuous SWC Overlay", color='#58a6ff', fontsize=12, fontweight='bold')
     ax_xz.imshow(mip_xz, cmap='magma', extent=[crop_x1, crop_x2, crop_z2, crop_z1], origin='upper', aspect=3.0, alpha=0.85)
     
+    lines_xz = []
     for p_id, c_id in edges:
         if p_id in voxel_coords and c_id in voxel_coords:
-            xp = [voxel_coords[p_id][0], voxel_coords[c_id][0]]
-            zp = [voxel_coords[p_id][2], voxel_coords[c_id][2]]
-            ax_xz.plot(xp, zp, color='#00ffcc', alpha=0.8, linewidth=1.1)
+            lines_xz.append([(voxel_coords[p_id][0], voxel_coords[p_id][2]),
+                             (voxel_coords[c_id][0], voxel_coords[c_id][2])])
+    if lines_xz:
+        lc_xz = LineCollection(lines_xz, colors='#00ffcc', alpha=0.8, linewidths=1.1)
+        ax_xz.add_collection(lc_xz)
             
     ax_xz.set_xlabel('X (voxels)', color='white', fontsize=9)
     ax_xz.set_ylabel('Z (optical slices)', color='white', fontsize=9)
@@ -169,19 +185,25 @@ def visualize_swc_on_volume(
     
     # Crop ROI MIP
     roi_sub = vol[:, int(ry1):int(ry2), int(rx1):int(rx2)].astype(np.float32)
-    p1_r, p99_r = np.percentile(roi_sub, 5), np.percentile(roi_sub, 99.8)
+    sample_roi = roi_sub[::2, ::2, ::2]
+    p1_r, p99_r = np.percentile(sample_roi, 5), np.percentile(sample_roi, 99.8)
     roi_sub = np.clip((roi_sub - p1_r) / (p99_r - p1_r + 1e-6), 0, 1)
     roi_mip = np.max(roi_sub, axis=0)
     
     ax_roi.imshow(roi_mip, cmap='inferno', extent=[rx1, rx2, ry2, ry1], origin='upper')
     
+    lines_roi = []
     for p_id, c_id in edges:
         if p_id in voxel_coords and c_id in voxel_coords:
             p_coord = voxel_coords[p_id]
             c_coord = voxel_coords[c_id]
             if (rx1 <= p_coord[0] <= rx2 and ry1 <= p_coord[1] <= ry2) or \
                (rx1 <= c_coord[0] <= rx2 and ry1 <= c_coord[1] <= ry2):
-                ax_roi.plot([p_coord[0], c_coord[0]], [p_coord[1], c_coord[1]], color='#39ff14', linewidth=1.5, alpha=0.95)
+                lines_roi.append([(p_coord[0], p_coord[1]), (c_coord[0], c_coord[1])])
+                
+    if lines_roi:
+        lc_roi = LineCollection(lines_roi, colors='#39ff14', linewidths=1.5, alpha=0.95)
+        ax_roi.add_collection(lc_roi)
                 
     ax_roi.set_xlim(rx1, rx2)
     ax_roi.set_ylim(ry2, ry1)
@@ -200,5 +222,5 @@ if __name__ == "__main__":
         tiff_path="F0046_multichannel_cmle_ch03.tif",
         swc_path="predicted_joined_skeleton.swc",
         output_png="swc_volume_visualization.png",
-        resolution=(0.112, 0.1102, 0.5)
+        resolution=(0.1102, 0.1102, 0.5)
     )
